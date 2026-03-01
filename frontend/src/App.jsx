@@ -3,13 +3,13 @@ import { useState, useCallback } from "react";
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 const LEAGUES = [
-  { key: "soccer_epl",                label: "Premier League",   flag: "\ud83c\udff4\udb40\udc67\udb40\udc62\udb40\udc65\udb40\udc6e\udb40\udc67\udb40\udc7f" },
-  { key: "soccer_uefa_champs_league", label: "Champions League", flag: "\u2b50" },
-  { key: "soccer_spain_la_liga",      label: "La Liga",          flag: "\ud83c\uddea\ud83c\uddf8" },
-  { key: "soccer_germany_bundesliga", label: "Bundesliga",       flag: "\ud83c\udde9\ud83c\uddea" },
-  { key: "soccer_italy_serie_a",      label: "Serie A",          flag: "\ud83c\uddee\ud83c\uddf9" },
-  { key: "soccer_france_ligue_one",   label: "Ligue 1",          flag: "\ud83c\uddeb\ud83c\uddf7" },
-  { key: "soccer_usa_mls",            label: "MLS",              flag: "\ud83c\uddfa\ud83c\uddf8" },
+  { key: "soccer_epl",                label: "Premier League",   flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
+  { key: "soccer_uefa_champs_league", label: "Champions League", flag: "⭐" },
+  { key: "soccer_spain_la_liga",      label: "La Liga",          flag: "🇪🇸" },
+  { key: "soccer_germany_bundesliga", label: "Bundesliga",       flag: "🇩🇪" },
+  { key: "soccer_italy_serie_a",      label: "Serie A",          flag: "🇮🇹" },
+  { key: "soccer_france_ligue_one",   label: "Ligue 1",          flag: "🇫🇷" },
+  { key: "soccer_usa_mls",            label: "MLS",              flag: "🇺🇸" },
 ];
 
 function americanToDecimal(odds) {
@@ -36,8 +36,8 @@ function fmtPct(p) {
   return `${(p * 100).toFixed(1)}%`;
 }
 function evColor(ev) {
-  if (ev > 0.05)  return "#00ff88";
-  if (ev > 0)     return "#88ffcc";
+  if (ev > 0.05) return "#00ff88";
+  if (ev > 0) return "#88ffcc";
   if (ev > -0.05) return "#ffcc44";
   return "#ff5555";
 }
@@ -61,10 +61,10 @@ function buildSuggestions(games, topN = 8) {
     const nvps = calcNoVigProbs(market.outcomes);
     market.outcomes.forEach((outcome, i) => {
       allLegs.push({
-        gameId:    game.id,
+        gameId: game.id,
         gameLabel: `${game.home_team} vs ${game.away_team}`,
-        outcome:   outcome.name,
-        price:     outcome.price,
+        outcome: outcome.name,
+        price: outcome.price,
         noVigProb: nvps[i],
       });
     });
@@ -75,8 +75,8 @@ function buildSuggestions(games, topN = 8) {
       const ids = combo.map((l) => l.gameId);
       if (new Set(ids).size !== ids.length) return;
       const combinedDec = calcCombinedDecimal(combo);
-      const fairProb    = calcCombinedFairProb(combo);
-      const ev          = calcEV(combinedDec, fairProb);
+      const fairProb = calcCombinedFairProb(combo);
+      const ev = calcEV(combinedDec, fairProb);
       results.push({ legs: combo, combinedDec, fairProb, ev });
     });
   });
@@ -99,10 +99,10 @@ function LegRow({ leg, onRemove }) {
         <span style={{ color: "#00ff88", fontFamily: "monospace", fontSize: 15, fontWeight: 700 }}>
           {fmtAmerican(leg.price)}
         </span>
-        <button onClick={() => onRemove(leg)}
-          style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 20, lineHeight: 1, padding: 0 }}>
-          \u00d7
-        </button>
+        <button
+          onClick={() => onRemove(leg)}
+          style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 20, lineHeight: 1, padding: 0 }}
+        >x</button>
       </div>
     </div>
   );
@@ -111,8 +111,8 @@ function LegRow({ leg, onRemove }) {
 function GameCard({ game, selectedLegs, onToggleLeg }) {
   const market = game.bookmakers?.[0]?.markets?.[0];
   if (!market) return null;
-  const nvps    = calcNoVigProbs(market.outcomes);
-  const date    = new Date(game.commence_time);
+  const nvps = calcNoVigProbs(market.outcomes);
+  const date = new Date(game.commence_time);
   const dateStr = date.toLocaleDateString("fr-CA", { month: "short", day: "numeric" });
   const timeStr = date.toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit" });
 
@@ -120,34 +120,34 @@ function GameCard({ game, selectedLegs, onToggleLeg }) {
     return selectedLegs.some((l) => l.gameId === game.id && l.outcome === name);
   }
   function outcomeLabel(name) {
-    if (name === game.home_team) return "\ud83c\udfe0 Dom.";
-    if (name === game.away_team) return "\u2708\ufe0f Vis.";
-    return "\ud83e\udd1d Nul";
+    if (name === game.home_team) return "Dom.";
+    if (name === game.away_team) return "Vis.";
+    return "Nul";
   }
 
   return (
-    <div style={{
-      background: "#0f1320", border: "1px solid #1e2535",
-      borderRadius: 10, padding: "12px 14px", marginBottom: 8,
-    }}>
+    <div style={{ background: "#0f1320", border: "1px solid #1e2535", borderRadius: 10, padding: "12px 14px", marginBottom: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-        <span style={{ fontSize: 10, color: "#445" }}>{dateStr} \u00b7 {timeStr}</span>
+        <span style={{ fontSize: 10, color: "#445" }}>{dateStr} - {timeStr}</span>
         <span style={{ fontSize: 10, color: "#334" }}>{game.sport_title}</span>
       </div>
       <div style={{ fontSize: 12, color: "#aab", marginBottom: 10, textAlign: "center", fontWeight: 600 }}>
-        {game.home_team} <span style={{ color: "#334" }}>vs</span> {game.away_team}
+        {game.home_team} vs {game.away_team}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 5 }}>
         {market.outcomes.map((outcome, idx) => {
           const sel = isSelected(outcome.name);
           return (
-            <button key={outcome.name} onClick={() => onToggleLeg(game, outcome, nvps[idx])}
+            <button
+              key={outcome.name}
+              onClick={() => onToggleLeg(game, outcome, nvps[idx])}
               style={{
                 background: sel ? "#003322" : "#141927",
                 border: `1px solid ${sel ? "#00aa55" : "#1e2535"}`,
                 borderRadius: 7, padding: "8px 4px",
-                cursor: "pointer", textAlign: "center", transition: "all 0.15s",
-              }}>
+                cursor: "pointer", textAlign: "center",
+              }}
+            >
               <div style={{ fontSize: 10, color: sel ? "#00ff88" : "#556", marginBottom: 3 }}>
                 {outcomeLabel(outcome.name)}
               </div>
@@ -168,23 +168,23 @@ function SuggestionCard({ parlay, index, onLoad }) {
   const shortLabel = (label) =>
     label.split(" vs ").map((t) => t.split(" ").slice(-1)[0]).join(" v ");
   return (
-    <div onClick={() => onLoad(parlay)} style={{
-      background: "#0a0f1a",
-      border: `1px solid ${parlay.ev > 0 ? "#1a3a2a" : "#1a1e2e"}`,
-      borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer",
-    }}>
+    <div
+      onClick={() => onLoad(parlay)}
+      style={{
+        background: "#0a0f1a",
+        border: `1px solid ${parlay.ev > 0 ? "#1a3a2a" : "#1a1e2e"}`,
+        borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer",
+      }}
+    >
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
         <span style={{ fontSize: 10, color: "#445", letterSpacing: 1 }}>
-          #{index + 1} \u00b7 {parlay.legs.length} JAMBES
+          #{index + 1} - {parlay.legs.length} JAMBES
         </span>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ fontSize: 11, color: "#778", fontFamily: "monospace" }}>
             {fmtAmerican(Math.round((parlay.combinedDec - 1) * 100))}
           </span>
-          <span style={{
-            fontSize: 11, fontWeight: 700, color,
-            background: `${color}22`, padding: "2px 8px", borderRadius: 20,
-          }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color, background: `${color}22`, padding: "2px 8px", borderRadius: 20 }}>
             EV {parlay.ev > 0 ? "+" : ""}{(parlay.ev * 100).toFixed(1)}%
           </span>
         </div>
@@ -196,17 +196,33 @@ function SuggestionCard({ parlay, index, onLoad }) {
         }}>
           <span style={{ fontSize: 11, color: "#667" }}>
             {leg.outcome.split(" ").slice(-1)[0]}
-            <span style={{ color: "#334", fontSize: 10 }}
+            <span style={{ color: "#334", fontSize: 10 }}> - {shortLabel(leg.gameLabel)}</span>
+          </span>
+          <span style={{ fontSize: 11, color: "#00cc66", fontFamily: "monospace" }}>
+            {fmtAmerican(leg.price)}
+          </span>
+        </div>
+      ))}
+      <div style={{ marginTop: 8, display: "flex", gap: 14 }}>
+        <span style={{ fontSize: 10, color: "#334" }}>
+          Prob: <span style={{ color: "#88aacc" }}>{fmtPct(parlay.fairProb)}</span>
+        </span>
+        <span style={{ fontSize: 10, color: "#334" }}>{parlay.combinedDec.toFixed(2)}x</span>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [selectedLeagues, setSelectedLeagues] = useState(["soccer_epl", "soccer_uefa_champs_league"]);
-  const [games,           setGames]           = useState([]);
-  const [loading,         setLoading]         = useState(false);
-  const [error,           setError]           = useState("");
-  const [remaining,       setRemaining]       = useState(null);
-  const [selectedLegs,    setSelectedLegs]    = useState([]);
-  const [stake,           setStake]           = useState(100);
-  const [suggestions,     setSuggestions]     = useState([]);
-  const [activeTab,       setActiveTab]       = useState("builder");
+  const [games, setGames] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [remaining, setRemaining] = useState(null);
+  const [selectedLegs, setSelectedLegs] = useState([]);
+  const [stake, setStake] = useState(100);
+  const [suggestions, setSuggestions] = useState([]);
+  const [activeTab, setActiveTab] = useState("builder");
 
   const fetchOdds = useCallback(async () => {
     if (selectedLeagues.length === 0) return;
@@ -217,7 +233,7 @@ export default function App() {
     try {
       const all = [];
       for (const sport of selectedLeagues) {
-        const res  = await fetch(`${API_BASE}/api/odds?sport=${sport}`);
+        const res = await fetch(`${API_BASE}/api/odds?sport=${sport}`);
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || `Erreur ${res.status}`);
         if (json.meta?.remainingRequests != null) setRemaining(json.meta.remainingRequests);
@@ -265,12 +281,12 @@ export default function App() {
     setActiveTab("builder");
   }
 
-  const hasLegs      = selectedLegs.length >= 2;
-  const combinedDec  = hasLegs ? calcCombinedDecimal(selectedLegs) : 1;
-  const fairProb     = hasLegs ? calcCombinedFairProb(selectedLegs) : 1;
-  const ev           = hasLegs ? calcEV(combinedDec, fairProb) : 0;
+  const hasLegs = selectedLegs.length >= 2;
+  const combinedDec = hasLegs ? calcCombinedDecimal(selectedLegs) : 1;
+  const fairProb = hasLegs ? calcCombinedFairProb(selectedLegs) : 1;
+  const ev = hasLegs ? calcEV(combinedDec, fairProb) : 0;
   const potentialWin = stake * combinedDec - stake;
-  const evc          = evColor(ev);
+  const evc = evColor(ev);
 
   return (
     <div style={{
@@ -283,12 +299,12 @@ export default function App() {
         padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 22 }}>⚽</span>
+          <span style={{ fontSize: 22 }}>S</span>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: "#00ff88", letterSpacing: 2 }}>
               PARLAY<span style={{ color: "#fff" }}>EDGE</span>
             </div>
-            <div style={{ fontSize: 10, color: "#445", letterSpacing: 1 }}>BETONLINE · THE ODDS API</div>
+            <div style={{ fontSize: 10, color: "#445", letterSpacing: 1 }}>BETONLINE - THE ODDS API</div>
           </div>
         </div>
         {remaining !== null && (
@@ -299,8 +315,6 @@ export default function App() {
       </header>
 
       <div style={{ display: "flex", flex: 1, overflow: "hidden", flexWrap: "wrap" }}>
-
-        {/* LEFT */}
         <div style={{ flex: 1, minWidth: 300, overflowY: "auto", padding: "16px 20px" }}>
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 10, color: "#445", letterSpacing: 1, marginBottom: 8 }}>LIGUES</div>
@@ -325,9 +339,9 @@ export default function App() {
             width: "100%", background: loading ? "#1a2035" : "#00ff88",
             color: loading ? "#445" : "#000", border: "none",
             padding: "10px", borderRadius: 8, cursor: loading ? "not-allowed" : "pointer",
-            fontSize: 13, fontWeight: 700, letterSpacing: 1, marginBottom: 14, transition: "background 0.2s",
+            fontSize: 13, fontWeight: 700, letterSpacing: 1, marginBottom: 14,
           }}>
-            {loading ? "⏳ Chargement..." : "🔄 CHARGER LES COTES BETONLINE"}
+            {loading ? "Chargement..." : "CHARGER LES COTES BETONLINE"}
           </button>
 
           {error && (
@@ -335,13 +349,13 @@ export default function App() {
               background: "#1a0a0a", border: "1px solid #aa2222",
               borderRadius: 8, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: "#ff6666",
             }}>
-              ⚠️ {error}
+              {error}
             </div>
           )}
 
           {games.length > 0 && (
             <div style={{ fontSize: 10, color: "#445", marginBottom: 10, letterSpacing: 1 }}>
-              {games.length} MATCHS — CLIQUE SUR UNE COTE POUR L'AJOUTER
+              {games.length} MATCHS
             </div>
           )}
 
@@ -351,20 +365,19 @@ export default function App() {
 
           {!loading && games.length === 0 && (
             <div style={{ textAlign: "center", color: "#334", padding: "50px 0", fontSize: 13 }}>
-              Sélectionne des ligues et charge les cotes ↑
+              Selectionne des ligues et charge les cotes
             </div>
           )}
         </div>
 
-        {/* RIGHT */}
         <div style={{
           width: 360, minWidth: 300, background: "#080c18",
           borderLeft: "1px solid #1a2035", display: "flex", flexDirection: "column", overflowY: "auto",
         }}>
           <div style={{ display: "flex", borderBottom: "1px solid #1a2035" }}>
             {[
-              { id: "builder",     label: "🎯 Builder" },
-              { id: "suggestions", label: `✨ Suggestions (${suggestions.length})` },
+              { id: "builder", label: "Builder" },
+              { id: "suggestions", label: `Suggestions (${suggestions.length})` },
             ].map((tab) => (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
                 flex: 1, padding: "12px 6px", border: "none", cursor: "pointer", fontSize: 11,
@@ -379,13 +392,13 @@ export default function App() {
 
           <div style={{ padding: 16, flex: 1 }}>
             {activeTab === "builder" && (
-              <>
+              <div>
                 <div style={{ fontSize: 10, color: "#445", letterSpacing: 1, marginBottom: 8 }}>
                   JAMBES ({selectedLegs.length})
                 </div>
                 {selectedLegs.length === 0 ? (
                   <div style={{ color: "#334", fontSize: 12, padding: "24px 0", textAlign: "center" }}>
-                    Clique sur les cotes à gauche pour construire ton parlay
+                    Clique sur les cotes a gauche pour construire ton parlay
                   </div>
                 ) : (
                   selectedLegs.map((leg) => (
@@ -394,18 +407,18 @@ export default function App() {
                 )}
 
                 {hasLegs && (
-                  <>
+                  <div>
                     <div style={{
                       background: "#0a0f1a", border: "1px solid #1a2035",
                       borderRadius: 10, padding: "14px", marginTop: 12, marginBottom: 12,
                     }}>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
                         <div>
-                          <div style={{ fontSize: 9, color: "#445", letterSpacing: 1, marginBottom: 4 }}>COTE COMBINÉE</div>
+                          <div style={{ fontSize: 9, color: "#445", letterSpacing: 1, marginBottom: 4 }}>COTE COMBINEE</div>
                           <div style={{ fontFamily: "monospace", fontSize: 20, fontWeight: 700, color: "#fff" }}>
                             {fmtAmerican(Math.round((combinedDec - 1) * 100))}
                           </div>
-                          <div style={{ fontSize: 10, color: "#445" }}>{combinedDec.toFixed(2)}x décimal</div>
+                          <div style={{ fontSize: 10, color: "#445" }}>{combinedDec.toFixed(2)}x decimal</div>
                         </div>
                         <div>
                           <div style={{ fontSize: 9, color: "#445", letterSpacing: 1, marginBottom: 4 }}>PROB. NO-VIG</div>
@@ -420,7 +433,7 @@ export default function App() {
                             {ev > 0 ? "+" : ""}{(ev * 100).toFixed(1)}%
                           </div>
                           <div style={{ fontSize: 10, color: "#445" }}>
-                            {ev > 0 ? "✅ Valeur positive" : "⚠️ Valeur négative"}
+                            {ev > 0 ? "Valeur positive" : "Valeur negative"}
                           </div>
                         </div>
                         <div>
@@ -446,31 +459,15 @@ export default function App() {
                         }}
                       />
                     </div>
-                  </>
+                  </div>
                 )}
-              </>
+              </div>
             )}
 
             {activeTab === "suggestions" && (
-              <>
+              <div>
                 <div style={{ fontSize: 10, color: "#445", letterSpacing: 1, marginBottom: 10 }}>
-                  MEILLEURS PARLAYS SUGGÉRÉS
+                  MEILLEURS PARLAYS SUGGERES
                 </div>
                 {suggestions.length === 0 ? (
-                  <div style={{ color: "#334", fontSize: 12, padding: "24px 0", textAlign: "center" }}>
-                    Charge des cotes d'abord ↑
-                  </div>
-                ) : (
-                  suggestions.map((parlay, i) => (
-                    <SuggestionCard key={i} parlay={parlay} index={i} onLoad={loadSuggestion} />
-                  ))
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
+ 
