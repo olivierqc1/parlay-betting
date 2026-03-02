@@ -5,5 +5,5 @@ import react from "@vitejs/plugin-react";
 // ex: repo "parlay-betting" → base: "/parlay-edge/"
 export default defineConfig({
   plugins: [react()],
-  base: "/parlay-edge/",
+  base: "/parlay-betting/",
 });
