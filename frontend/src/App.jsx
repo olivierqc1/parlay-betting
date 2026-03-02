@@ -23,12 +23,6 @@ function calcNoVigProbs(outcomes) {
 function calcCombinedDecimal(legs) {
   return legs.reduce((acc, l) => acc * americanToDecimal(l.price), 1);
 }
-function calcCombinedFairProb(legs) {
-  return legs.reduce((acc, l) => acc * l.noVigProb, 1);
-}
-function calcEV(combinedDec, fairProb) {
-  return fairProb * combinedDec - 1;
-}
 function fmtAmerican(odds) {
   return odds > 0 ? "+" + Math.round(odds) : "" + Math.round(odds);
 }
@@ -40,6 +34,81 @@ function evColor(ev) {
   if (ev > 0) return "#88ffcc";
   if (ev > -0.05) return "#ffcc44";
   return "#ff5555";
+}
+function edgeColor(edge) {
+  if (edge > 0.06) return "#00ff88";
+  if (edge > 0.02) return "#88ffcc";
+  if (edge > -0.02) return "#ffcc44";
+  return "#ff5555";
+}
+
+// Matching de noms d'équipes (API-Football vs The Odds API)
+function fuzzyMatch(name1, name2) {
+  const clean = (s) => s.toLowerCase()
+    .replace(/\s*(fc|cf|sc|ac|as|rc|ss|vfb|vfl|rb|bvb|sv|1\.|fsv|tsg|tsv)\s*/gi, " ")
+    .replace(/[^a-z0-9 ]/g, "")
+    .trim();
+  const a = clean(name1);
+  const b = clean(name2);
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  // Mots en commun
+  const wordsA = a.split(" ").filter(w => w.length > 2);
+  const wordsB = b.split(" ").filter(w => w.length > 2);
+  const common = wordsA.filter(w => wordsB.includes(w));
+  return common.length >= 1 && common.length >= Math.min(wordsA.length, wordsB.length) * 0.6;
+}
+
+function findTeamInStandings(teamName, standings) {
+  for (const [name, stats] of Object.entries(standings)) {
+    if (fuzzyMatch(teamName, name)) return stats;
+  }
+  return null;
+}
+
+// Calcule probabilité modèle maison
+function calcModelProbs(homeTeam, awayTeam, standings, totalTeams) {
+  const homeStats = findTeamInStandings(homeTeam, standings);
+  const awayStats = findTeamInStandings(awayTeam, standings);
+  if (!homeStats || !awayStats) return null;
+
+  const homeRankScore = (totalTeams - homeStats.rank + 1) / totalTeams;
+  const awayRankScore = (totalTeams - awayStats.rank + 1) / totalTeams;
+
+  function formScore(formStr) {
+    if (!formStr) return 0.5;
+    const last5 = formStr.slice(-5);
+    let score = 0;
+    for (const c of last5) {
+      if (c === "W") score += 1;
+      else if (c === "D") score += 0.4;
+    }
+    return score / 5;
+  }
+
+  const homeForm = formScore(homeStats.form);
+  const awayForm = formScore(awayStats.form);
+  const homeAttack = homeStats.played > 0 ? homeStats.goalsFor / homeStats.played : 1;
+  const homeDef = homeStats.played > 0 ? homeStats.goalsAgainst / homeStats.played : 1;
+  const awayAttack = awayStats.played > 0 ? awayStats.goalsFor / awayStats.played : 1;
+  const awayDef = awayStats.played > 0 ? awayStats.goalsAgainst / awayStats.played : 1;
+  const homeXG = homeAttack / (awayDef + 0.1);
+  const awayXG = awayAttack / (homeDef + 0.1);
+  const homeBonus = 0.08;
+
+  const homeScore = (homeRankScore * 0.35) + (homeForm * 0.35) + (homeXG / (homeXG + awayXG + 0.01) * 0.30) + homeBonus;
+  const awayScore = (awayRankScore * 0.35) + (awayForm * 0.35) + (awayXG / (homeXG + awayXG + 0.01) * 0.30);
+  const total = homeScore + awayScore + 0.25;
+
+  return {
+    home: Math.max(0.05, Math.min(0.85, homeScore / total)),
+    away: Math.max(0.05, Math.min(0.85, awayScore / total)),
+    draw: Math.max(0.05, Math.min(0.40, 1 - homeScore / total - awayScore / total)),
+    homeTeamName: homeTeam,
+    awayTeamName: awayTeam,
+    homeStats,
+    awayStats,
+  };
 }
 
 function getCombinations(arr, k) {
@@ -53,34 +122,80 @@ function getCombinations(arr, k) {
   return result;
 }
 
-function buildSuggestions(games, topN = 8) {
+function buildSuggestions(games, standingsMap, topN = 10) {
   const allLegs = [];
+
   games.forEach((game) => {
     const market = game.bookmakers?.[0]?.markets?.[0];
     if (!market) return;
+
+    // Trouver les standings pour ce match
+    let modelProbs = null;
+    for (const [sport, { standings, totalTeams }] of Object.entries(standingsMap)) {
+      const mp = calcModelProbs(game.home_team, game.away_team, standings, totalTeams);
+      if (mp) { modelProbs = mp; break; }
+    }
+
     const nvps = calcNoVigProbs(market.outcomes);
+
     market.outcomes.forEach((outcome, i) => {
+      if (outcome.price < -200) return;
+
+      const bookProb = nvps[i];
+      let modelProb = bookProb; // fallback = cotes bookmaker
+      let edge = 0;
+
+      if (modelProbs) {
+        const isHome = outcome.name === game.home_team;
+        const isAway = outcome.name === game.away_team;
+        if (isHome) { modelProb = modelProbs.home; }
+        else if (isAway) { modelProb = modelProbs.away; }
+        else { modelProb = modelProbs.draw; }
+        edge = modelProb - bookProb;
+      }
+
       allLegs.push({
         gameId: game.id,
         gameLabel: game.home_team + " vs " + game.away_team,
         outcome: outcome.name,
         price: outcome.price,
-        noVigProb: nvps[i],
+        noVigProb: bookProb,
+        modelProb,
+        edge,
+        hasModel: !!modelProbs,
       });
     });
   });
+
   const results = [];
   [2, 3].forEach((size) => {
     getCombinations(allLegs, size).forEach((combo) => {
       const ids = combo.map((l) => l.gameId);
       if (new Set(ids).size !== ids.length) return;
+
       const combinedDec = calcCombinedDecimal(combo);
-      const fairProb = calcCombinedFairProb(combo);
-      const ev = calcEV(combinedDec, fairProb);
-      results.push({ legs: combo, combinedDec, fairProb, ev });
+      const modelProb = combo.reduce((acc, l) => acc * l.modelProb, 1);
+      const bookProb = combo.reduce((acc, l) => acc * l.noVigProb, 1);
+      const modelEV = modelProb * combinedDec - 1;
+      const combinedEdge = combo.reduce((sum, l) => sum + l.edge, 0) / combo.length;
+
+      // Filtres
+      if (modelProb < 0.12 || modelProb > 0.60) return;
+      const americanOdds = (combinedDec - 1) * 100;
+      if (americanOdds < 120) return;
+      // Favoriser les parlays avec edge positif selon notre modèle
+      if (modelEV < -0.15) return;
+
+      const hasModel = combo.some((l) => l.hasModel);
+      const valueScore = hasModel
+        ? modelEV * Math.sqrt(modelProb) * Math.log(combinedDec) * (1 + combinedEdge)
+        : modelEV * Math.sqrt(bookProb) * Math.log(combinedDec);
+
+      results.push({ legs: combo, combinedDec, modelProb, bookProb, modelEV, combinedEdge, hasModel, valueScore });
     });
   });
-  return results.sort((a, b) => b.ev - a.ev).slice(0, topN);
+
+  return results.sort((a, b) => b.valueScore - a.valueScore).slice(0, topN);
 }
 
 function LegRow({ leg, onRemove }) {
@@ -89,7 +204,14 @@ function LegRow({ leg, onRemove }) {
       <div>
         <div style={{ fontSize:10, color:"#556", marginBottom:2 }}>{leg.gameLabel}</div>
         <div style={{ fontSize:13, color:"#eee", fontWeight:600 }}>{leg.outcome}</div>
-        <div style={{ fontSize:10, color:"#445", marginTop:1 }}>no-vig {fmtPct(leg.noVigProb)}</div>
+        <div style={{ fontSize:10, color:"#445", marginTop:1 }}>
+          book {fmtPct(leg.noVigProb)}
+          {leg.hasModel && leg.edge !== 0 && (
+            <span style={{ color: leg.edge > 0 ? "#00ff88" : "#ff5555", marginLeft:6 }}>
+              modèle {fmtPct(leg.modelProb)} ({leg.edge > 0 ? "+" : ""}{fmtPct(leg.edge)})
+            </span>
+          )}
+        </div>
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:10 }}>
         <span style={{ color:"#00ff88", fontFamily:"monospace", fontSize:15, fontWeight:700 }}>{fmtAmerican(leg.price)}</span>
@@ -99,13 +221,20 @@ function LegRow({ leg, onRemove }) {
   );
 }
 
-function GameCard({ game, selectedLegs, onToggleLeg }) {
+function GameCard({ game, selectedLegs, onToggleLeg, standingsMap }) {
   const market = game.bookmakers?.[0]?.markets?.[0];
   if (!market) return null;
   const nvps = calcNoVigProbs(market.outcomes);
   const date = new Date(game.commence_time);
   const dateStr = date.toLocaleDateString("fr-CA", { month:"short", day:"numeric" });
   const timeStr = date.toLocaleTimeString("fr-CA", { hour:"2-digit", minute:"2-digit" });
+
+  let modelProbs = null;
+  for (const [, { standings, totalTeams }] of Object.entries(standingsMap)) {
+    const mp = calcModelProbs(game.home_team, game.away_team, standings, totalTeams);
+    if (mp) { modelProbs = mp; break; }
+  }
+
   function isSelected(name) {
     return selectedLegs.some((l) => l.gameId === game.id && l.outcome === name);
   }
@@ -114,11 +243,20 @@ function GameCard({ game, selectedLegs, onToggleLeg }) {
     if (name === game.away_team) return "Vis.";
     return "Nul";
   }
+  function getModelProb(name) {
+    if (!modelProbs) return null;
+    if (name === game.home_team) return modelProbs.home;
+    if (name === game.away_team) return modelProbs.away;
+    return modelProbs.draw;
+  }
+
   return (
     <div style={{ background:"#0f1320", border:"1px solid #1e2535", borderRadius:10, padding:"12px 14px", marginBottom:8 }}>
       <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
         <span style={{ fontSize:10, color:"#445" }}>{dateStr} - {timeStr}</span>
-        <span style={{ fontSize:10, color:"#334" }}>{game.sport_title}</span>
+        <span style={{ fontSize:10, color: modelProbs ? "#00aa55" : "#334" }}>
+          {modelProbs ? "✓ modèle" : game.sport_title}
+        </span>
       </div>
       <div style={{ fontSize:12, color:"#aab", marginBottom:10, textAlign:"center", fontWeight:600 }}>
         {game.home_team} vs {game.away_team}
@@ -126,12 +264,20 @@ function GameCard({ game, selectedLegs, onToggleLeg }) {
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:5 }}>
         {market.outcomes.map((outcome, idx) => {
           const sel = isSelected(outcome.name);
+          const tooHeavy = outcome.price < -200;
+          const mp = getModelProb(outcome.name);
+          const edge = mp ? mp - nvps[idx] : 0;
           return (
-            <button key={outcome.name} onClick={() => onToggleLeg(game, outcome, nvps[idx])}
-              style={{ background:sel?"#003322":"#141927", border:"1px solid "+(sel?"#00aa55":"#1e2535"), borderRadius:7, padding:"8px 4px", cursor:"pointer", textAlign:"center" }}>
-              <div style={{ fontSize:10, color:sel?"#00ff88":"#556", marginBottom:3 }}>{outcomeLabel(outcome.name)}</div>
-              <div style={{ fontFamily:"monospace", fontSize:15, fontWeight:700, color:sel?"#00ff88":"#ddd" }}>{fmtAmerican(outcome.price)}</div>
-              <div style={{ fontSize:9, color:"#334", marginTop:2 }}>{fmtPct(nvps[idx])}</div>
+            <button key={outcome.name} onClick={() => !tooHeavy && onToggleLeg(game, outcome, nvps[idx], mp || nvps[idx], edge, !!modelProbs)}
+              style={{ background:sel?"#003322":tooHeavy?"#0a0c14":"#141927", border:"1px solid "+(sel?"#00aa55":tooHeavy?"#111":edge>0.03?"#1a4a2a":"#1e2535"), borderRadius:7, padding:"8px 4px", cursor:tooHeavy?"not-allowed":"pointer", textAlign:"center", opacity:tooHeavy?0.4:1 }}>
+              <div style={{ fontSize:10, color:sel?"#00ff88":"#556", marginBottom:2 }}>{outcomeLabel(outcome.name)}</div>
+              <div style={{ fontFamily:"monospace", fontSize:15, fontWeight:700, color:sel?"#00ff88":tooHeavy?"#444":"#ddd" }}>{fmtAmerican(outcome.price)}</div>
+              <div style={{ fontSize:9, color:"#445" }}>book {fmtPct(nvps[idx])}</div>
+              {mp && (
+                <div style={{ fontSize:9, color: edge > 0.02 ? "#00ff88" : edge < -0.02 ? "#ff6666" : "#778", marginTop:1 }}>
+                  mdl {fmtPct(mp)} {edge > 0 ? "▲" : "▼"}
+                </div>
+              )}
             </button>
           );
         })}
@@ -141,24 +287,41 @@ function GameCard({ game, selectedLegs, onToggleLeg }) {
 }
 
 function SuggestionCard({ parlay, index, onLoad }) {
-  const color = evColor(parlay.ev);
+  const evColor2 = evColor(parlay.modelEV);
+  const ec = edgeColor(parlay.combinedEdge);
   const shortLabel = (label) => label.split(" vs ").map((t) => t.split(" ").slice(-1)[0]).join(" v ");
+  const americanOdds = Math.round((parlay.combinedDec - 1) * 100);
   return (
-    <div onClick={() => onLoad(parlay)} style={{ background:"#0a0f1a", border:"1px solid "+(parlay.ev>0?"#1a3a2a":"#1a1e2e"), borderRadius:10, padding:"12px 14px", marginBottom:8, cursor:"pointer" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
-        <span style={{ fontSize:10, color:"#445" }}>#{index+1} - {parlay.legs.length} JAMBES</span>
-        <span style={{ fontSize:11, fontWeight:700, color, background:color+"22", padding:"2px 8px", borderRadius:20 }}>
-          EV {parlay.ev > 0 ? "+" : ""}{(parlay.ev*100).toFixed(1)}%
-        </span>
+    <div onClick={() => onLoad(parlay)} style={{ background:"#0a0f1a", border:"1px solid "+(parlay.modelEV>0?"#1a3a2a":"#1a1e2e"), borderRadius:10, padding:"12px 14px", marginBottom:8, cursor:"pointer" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
+        <span style={{ fontSize:10, color:"#445" }}>#{index+1} · {parlay.legs.length} JAMBES {parlay.hasModel ? "✓" : ""}</span>
+        <div style={{ display:"flex", gap:6 }}>
+          {parlay.hasModel && (
+            <span style={{ fontSize:10, fontWeight:700, color:ec, background:ec+"22", padding:"2px 6px", borderRadius:20 }}>
+              edge {parlay.combinedEdge > 0 ? "+" : ""}{fmtPct(parlay.combinedEdge)}
+            </span>
+          )}
+          <span style={{ fontSize:10, fontWeight:700, color:evColor2, background:evColor2+"22", padding:"2px 6px", borderRadius:20 }}>
+            EV {parlay.modelEV > 0 ? "+" : ""}{(parlay.modelEV*100).toFixed(1)}%
+          </span>
+        </div>
       </div>
       {parlay.legs.map((leg, i) => (
         <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"3px 0", borderBottom:i<parlay.legs.length-1?"1px solid #111":"none" }}>
-          <span style={{ fontSize:11, color:"#667" }}>{leg.outcome.split(" ").slice(-1)[0]} - {shortLabel(leg.gameLabel)}</span>
-          <span style={{ fontSize:11, color:"#00cc66", fontFamily:"monospace" }}>{fmtAmerican(leg.price)}</span>
+          <span style={{ fontSize:11, color:"#667" }}>{leg.outcome.split(" ").slice(-1)[0]} · {shortLabel(leg.gameLabel)}</span>
+          <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+            {leg.hasModel && leg.edge !== 0 && (
+              <span style={{ fontSize:9, color: leg.edge > 0 ? "#00ff88" : "#ff5555" }}>
+                {leg.edge > 0 ? "+" : ""}{fmtPct(leg.edge)}
+              </span>
+            )}
+            <span style={{ fontSize:11, color:"#00cc66", fontFamily:"monospace" }}>{fmtAmerican(leg.price)}</span>
+          </div>
         </div>
       ))}
-      <div style={{ marginTop:8, display:"flex", gap:14 }}>
-        <span style={{ fontSize:10, color:"#334" }}>Prob: <span style={{ color:"#88aacc" }}>{fmtPct(parlay.fairProb)}</span></span>
+      <div style={{ marginTop:8, display:"flex", gap:14, flexWrap:"wrap" }}>
+        <span style={{ fontSize:10, color:"#334" }}>Cote: <span style={{ color:"#fff", fontFamily:"monospace" }}>{fmtAmerican(americanOdds)}</span></span>
+        <span style={{ fontSize:10, color:"#334" }}>Prob modèle: <span style={{ color:"#88aacc" }}>{fmtPct(parlay.modelProb)}</span></span>
         <span style={{ fontSize:10, color:"#334" }}>{parlay.combinedDec.toFixed(2)}x</span>
       </div>
     </div>
@@ -168,7 +331,9 @@ function SuggestionCard({ parlay, index, onLoad }) {
 export default function App() {
   const [selectedLeagues, setSelectedLeagues] = useState(["soccer_epl", "soccer_uefa_champs_league"]);
   const [games, setGames] = useState([]);
+  const [standingsMap, setStandingsMap] = useState({});
   const [loading, setLoading] = useState(false);
+  const [modelLoading, setModelLoading] = useState(false);
   const [error, setError] = useState("");
   const [remaining, setRemaining] = useState(null);
   const [selectedLegs, setSelectedLegs] = useState([]);
@@ -190,7 +355,25 @@ export default function App() {
       }
       all.sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time));
       setGames(all);
-      if (all.length > 0) setSuggestions(buildSuggestions(all));
+
+      // Fetch standings en parallèle
+      setModelLoading(true);
+      const newStandings = {};
+      await Promise.all(selectedLeagues.map(async (sport) => {
+        try {
+          const res = await fetch(API_BASE + "/api/model/" + sport);
+          if (res.ok) {
+            const json = await res.json();
+            newStandings[sport] = { standings: json.standings, totalTeams: json.totalTeams };
+          }
+        } catch (e) {
+          console.warn("Model fetch failed for", sport, e.message);
+        }
+      }));
+      setStandingsMap(newStandings);
+      setModelLoading(false);
+
+      if (all.length > 0) setSuggestions(buildSuggestions(all, newStandings));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -202,14 +385,19 @@ export default function App() {
     setSelectedLeagues((prev) => prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]);
   }
 
-  function handleToggleLeg(game, outcome, noVigProb) {
+  function handleToggleLeg(game, outcome, noVigProb, modelProb, edge, hasModel) {
     setSelectedLegs((prev) => {
       const already = prev.find((l) => l.gameId === game.id && l.outcome === outcome.name);
       if (already) return prev.filter((l) => !(l.gameId === game.id && l.outcome === outcome.name));
       return [...prev.filter((l) => l.gameId !== game.id), {
         gameId: game.id,
         gameLabel: game.home_team + " vs " + game.away_team,
-        outcome: outcome.name, price: outcome.price, noVigProb,
+        outcome: outcome.name,
+        price: outcome.price,
+        noVigProb,
+        modelProb: modelProb || noVigProb,
+        edge: edge || 0,
+        hasModel: hasModel || false,
       }];
     });
   }
@@ -224,23 +412,25 @@ export default function App() {
   }
 
   const hasLegs = selectedLegs.length >= 2;
-  const combinedDec = hasLegs ? calcCombinedDecimal(selectedLegs) : 1;
-  const fairProb = hasLegs ? calcCombinedFairProb(selectedLegs) : 1;
-  const ev = hasLegs ? calcEV(combinedDec, fairProb) : 0;
+  const combinedDec = hasLegs ? selectedLegs.reduce((acc, l) => acc * americanToDecimal(l.price), 1) : 1;
+  const modelProb = hasLegs ? selectedLegs.reduce((acc, l) => acc * l.modelProb, 1) : 1;
+  const bookProb = hasLegs ? selectedLegs.reduce((acc, l) => acc * l.noVigProb, 1) : 1;
+  const modelEV = hasLegs ? modelProb * combinedDec - 1 : 0;
   const potentialWin = stake * combinedDec - stake;
-  const evc = evColor(ev);
+  const evc = evColor(modelEV);
+  const avgEdge = hasLegs ? selectedLegs.reduce((s, l) => s + l.edge, 0) / selectedLegs.length : 0;
 
   return (
     <div style={{ minHeight:"100vh", background:"#070b14", color:"#ccd", fontFamily:"'IBM Plex Mono','Courier New',monospace", display:"flex", flexDirection:"column" }}>
       <header style={{ background:"#0a0f1c", borderBottom:"1px solid #1a2035", padding:"14px 20px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-          <div>
-            <div style={{ fontSize:15, fontWeight:700, color:"#00ff88", letterSpacing:2 }}>PARLAY<span style={{ color:"#fff" }}>EDGE</span></div>
-            <div style={{ fontSize:10, color:"#445", letterSpacing:1 }}>BETONLINE - THE ODDS API</div>
+        <div>
+          <div style={{ fontSize:15, fontWeight:700, color:"#00ff88", letterSpacing:2 }}>PARLAY<span style={{ color:"#fff" }}>EDGE</span></div>
+          <div style={{ fontSize:10, color:"#445", letterSpacing:1 }}>
+            {modelLoading ? <span style={{ color:"#ffcc44" }}>chargement modèle...</span> : Object.keys(standingsMap).length > 0 ? <span style={{ color:"#00aa55" }}>✓ modèle actif</span> : "BETONLINE · API-FOOTBALL"}
           </div>
         </div>
         {remaining !== null && (
-          <span style={{ fontSize:11, color:"#445" }}><span style={{ color:"#88aacc" }}>{remaining.toLocaleString()}</span> req. restantes</span>
+          <span style={{ fontSize:11, color:"#445" }}><span style={{ color:"#88aacc" }}>{remaining.toLocaleString()}</span> req.</span>
         )}
       </header>
 
@@ -261,15 +451,19 @@ export default function App() {
           </div>
 
           <button onClick={fetchOdds} disabled={loading} style={{ width:"100%", background:loading?"#1a2035":"#00ff88", color:loading?"#445":"#000", border:"none", padding:"10px", borderRadius:8, cursor:loading?"not-allowed":"pointer", fontSize:13, fontWeight:700, marginBottom:14 }}>
-            {loading ? "Chargement..." : "CHARGER LES COTES BETONLINE"}
+            {loading ? "Chargement..." : "CHARGER LES COTES + MODELE"}
           </button>
 
           {error && <div style={{ background:"#1a0a0a", border:"1px solid #aa2222", borderRadius:8, padding:"10px 14px", marginBottom:12, fontSize:12, color:"#ff6666" }}>{error}</div>}
 
-          {games.length > 0 && <div style={{ fontSize:10, color:"#445", marginBottom:10 }}>{games.length} MATCHS</div>}
+          {games.length > 0 && (
+            <div style={{ fontSize:10, color:"#445", marginBottom:10 }}>
+              {games.length} MATCHS · {Object.keys(standingsMap).length > 0 ? <span style={{ color:"#00aa55" }}>✓ modèle chargé</span> : "sans modèle"}
+            </div>
+          )}
 
           {games.map((game) => (
-            <GameCard key={game.id} game={game} selectedLegs={selectedLegs} onToggleLeg={handleToggleLeg} />
+            <GameCard key={game.id} game={game} selectedLegs={selectedLegs} onToggleLeg={handleToggleLeg} standingsMap={standingsMap} />
           ))}
 
           {!loading && games.length === 0 && (
@@ -279,7 +473,7 @@ export default function App() {
 
         <div style={{ width:360, minWidth:300, background:"#080c18", borderLeft:"1px solid #1a2035", display:"flex", flexDirection:"column", overflowY:"auto" }}>
           <div style={{ display:"flex", borderBottom:"1px solid #1a2035" }}>
-            {[{ id:"builder", label:"Builder" }, { id:"suggestions", label:"Suggestions ("+suggestions.length+")" }].map((tab) => (
+            {[{ id:"builder", label:"Builder" }, { id:"suggestions", label:"Top Parlays ("+suggestions.length+")" }].map((tab) => (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ flex:1, padding:"12px 6px", border:"none", cursor:"pointer", fontSize:11, background:activeTab===tab.id?"#0f1320":"transparent", color:activeTab===tab.id?"#00ff88":"#445", borderBottom:activeTab===tab.id?"2px solid #00ff88":"2px solid transparent" }}>
                 {tab.label}
               </button>
@@ -305,19 +499,25 @@ export default function App() {
                           <div style={{ fontSize:10, color:"#445" }}>{combinedDec.toFixed(2)}x</div>
                         </div>
                         <div>
-                          <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>PROB. NO-VIG</div>
-                          <div style={{ fontFamily:"monospace", fontSize:20, fontWeight:700, color:"#88aacc" }}>{fmtPct(fairProb)}</div>
+                          <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>PROB MODELE</div>
+                          <div style={{ fontFamily:"monospace", fontSize:20, fontWeight:700, color:"#88aacc" }}>{fmtPct(modelProb)}</div>
+                          <div style={{ fontSize:10, color:"#445" }}>book: {fmtPct(bookProb)}</div>
                         </div>
                         <div>
-                          <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>EV</div>
-                          <div style={{ fontFamily:"monospace", fontSize:20, fontWeight:700, color:evc }}>{ev>0?"+":""}{(ev*100).toFixed(1)}%</div>
-                          <div style={{ fontSize:10, color:"#445" }}>{ev>0?"Valeur positive":"Valeur negative"}</div>
+                          <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>EV MODELE</div>
+                          <div style={{ fontFamily:"monospace", fontSize:20, fontWeight:700, color:evc }}>{modelEV>0?"+":""}{(modelEV*100).toFixed(1)}%</div>
+                          <div style={{ fontSize:10, color:"#445" }}>{modelEV>0?"Valeur positive":"Valeur negative"}</div>
                         </div>
                         <div>
-                          <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>GAIN POTENTIEL</div>
-                          <div style={{ fontFamily:"monospace", fontSize:20, fontWeight:700, color:"#fff" }}>${potentialWin.toFixed(2)}</div>
-                          <div style={{ fontSize:10, color:"#445" }}>pour ${stake}</div>
+                          <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>EDGE MOY</div>
+                          <div style={{ fontFamily:"monospace", fontSize:20, fontWeight:700, color:edgeColor(avgEdge) }}>{avgEdge>0?"+":""}{fmtPct(avgEdge)}</div>
+                          <div style={{ fontSize:10, color:"#445" }}>vs BetOnline</div>
                         </div>
+                      </div>
+                      <div style={{ marginTop:12, borderTop:"1px solid #1a2035", paddingTop:10 }}>
+                        <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>GAIN POTENTIEL</div>
+                        <div style={{ fontFamily:"monospace", fontSize:22, fontWeight:700, color:"#fff" }}>${potentialWin.toFixed(2)}</div>
+                        <div style={{ fontSize:10, color:"#445" }}>pour ${stake}</div>
                       </div>
                     </div>
                     <div style={{ marginBottom:12 }}>
@@ -332,7 +532,8 @@ export default function App() {
 
             {activeTab === "suggestions" && (
               <div>
-                <div style={{ fontSize:10, color:"#445", marginBottom:10 }}>MEILLEURS PARLAYS</div>
+                <div style={{ fontSize:10, color:"#445", marginBottom:4 }}>TOP PARLAYS PAR VALEUR MODELE</div>
+                <div style={{ fontSize:9, color:"#334", marginBottom:12 }}>Trié par edge vs BetOnline · Aucune jambe sous -200</div>
                 {suggestions.length === 0 ? (
                   <div style={{ color:"#334", fontSize:12, padding:"24px 0", textAlign:"center" }}>Charge des cotes d'abord</div>
                 ) : (
