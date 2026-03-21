@@ -5,153 +5,102 @@ require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const ODDS_API_KEY = process.env.ODDS_API_KEY;
-const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
+const ODDS_KEY = process.env.ODDS_API_KEY;
+const FB_KEY   = process.env.FOOTBALL_API_KEY;
 
 app.use(cors());
 app.use(express.json());
 
-// ─── Cache simple ─────────────────────────────────────────────────────────────
-const cache = {};
+// ─── Cache ────────────────────────────────────────────────────────────────────
+const cache = new Map();
 function getCache(key) {
-  const entry = cache[key];
-  if (!entry) return null;
-  if (Date.now() - entry.timestamp > entry.ttl) return null;
-  return entry.data;
+  const e = cache.get(key);
+  if (!e) return null;
+  if (Date.now() - e.ts > e.ttl) { cache.delete(key); return null; }
+  return e.data;
 }
 function setCache(key, data, ttlMs) {
-  cache[key] = { data, timestamp: Date.now(), ttl: ttlMs };
+  cache.set(key, { data, ts: Date.now(), ttl: ttlMs });
 }
 
-// ─── Ligues ───────────────────────────────────────────────────────────────────
+// ─── Odds API sport key → API-Football league id ──────────────────────────────
 const LEAGUE_MAP = {
-  soccer_epl:                    { id: 39,  season: 2024 },
-  soccer_uefa_champs_league:     { id: 2,   season: 2024 },
-  soccer_spain_la_liga:          { id: 140, season: 2024 },
-  soccer_germany_bundesliga:     { id: 78,  season: 2024 },
-  soccer_italy_serie_a:          { id: 135, season: 2024 },
-  soccer_france_ligue_one:       { id: 61,  season: 2024 },
-  soccer_france_ligue_2:         { id: 62,  season: 2024 },
-  soccer_france_ligue_nationale: { id: 63,  season: 2024 },
-  soccer_italy_serie_b:          { id: 136, season: 2024 },
-  soccer_spain_segunda_division: { id: 141, season: 2024 },
-  soccer_germany_bundesliga2:    { id: 79,  season: 2024 },
-  soccer_usa_mls:                { id: 253, season: 2024 },
+  soccer_france_ligue_one:             { id: 61,  season: 2024 },
+  soccer_france_ligue_2:               { id: 62,  season: 2024 },
+  soccer_france_ligue_nationale:       { id: 63,  season: 2024 },
+  soccer_epl:                          { id: 39,  season: 2024 },
+  soccer_england_championship:         { id: 40,  season: 2024 },
+  soccer_england_league1:              { id: 41,  season: 2024 },
+  soccer_england_league2:              { id: 42,  season: 2024 },
+  soccer_spain_la_liga:                { id: 140, season: 2024 },
+  soccer_spain_segunda_division:       { id: 141, season: 2024 },
+  soccer_germany_bundesliga:           { id: 78,  season: 2024 },
+  soccer_germany_bundesliga2:          { id: 79,  season: 2024 },
+  soccer_italy_serie_a:                { id: 135, season: 2024 },
+  soccer_italy_serie_b:                { id: 136, season: 2024 },
+  soccer_uefa_champs_league:           { id: 2,   season: 2024 },
+  soccer_uefa_europa_league:           { id: 3,   season: 2024 },
+  soccer_netherlands_eredivisie:       { id: 88,  season: 2024 },
+  soccer_belgium_first_div:            { id: 144, season: 2024 },
+  soccer_portugal_primeira_liga:       { id: 94,  season: 2024 },
+  soccer_turkey_super_league:          { id: 203, season: 2024 },
+  soccer_scotland_premiership:         { id: 179, season: 2024 },
+  soccer_greece_super_league:          { id: 197, season: 2024 },
+  soccer_usa_mls:                      { id: 253, season: 2024 },
+  soccer_brazil_campeonato:            { id: 71,  season: 2025 },
+  soccer_argentina_primera_division:   { id: 128, season: 2024 },
+  soccer_mexico_ligamx:                { id: 262, season: 2024 },
+  soccer_denmark_superliga:            { id: 119, season: 2024 },
+  soccer_sweden_allsvenskan:           { id: 113, season: 2024 },
+  soccer_norway_eliteserien:           { id: 103, season: 2024 },
+  soccer_switzerland_superleague:      { id: 207, season: 2024 },
+  soccer_switzerland_challenge_league: { id: 208, season: 2024 },
+  soccer_austria_bundesliga:           { id: 218, season: 2024 },
+  soccer_ireland_premier_division:     { id: 357, season: 2025 },
+  soccer_russia_fpl:                   { id: 235, season: 2024 },
+  soccer_australia_aleague:            { id: 188, season: 2024 },
+  soccer_japan_j_league:               { id: 98,  season: 2024 },
 };
 
-// ─── Matching équipes ─────────────────────────────────────────────────────────
-function normalizeName(name) {
-  return name
-    .toLowerCase()
-    .replace(/\b(fc|cf|sc|ac|as|rc|ss|afc|utd|united|city|town|sporting|athletic|real|club|calcio|inter|atletico)\b/g, "")
-    .replace(/^(1\.|vfb|vfl|rb|bvb|sv|fsv|tsg|tsv|sc|fc|ac|as|ss|rc)\s+/g, "")
-    .replace(/[^a-z0-9]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-function teamMatchScore(nameA, nameB) {
-  const a = normalizeName(nameA), b = normalizeName(nameB);
-  if (a === b) return 1.0;
-  if (a.includes(b) || b.includes(a)) return 0.9;
-  const wA = a.split(" ").filter(w => w.length > 2);
-  const wB = b.split(" ").filter(w => w.length > 2);
-  if (!wA.length || !wB.length) return 0;
-  return wA.filter(w => wB.includes(w)).length / Math.max(wA.length, wB.length);
-}
-function findTeamInStandings(teamName, standings) {
-  let best = null, bestScore = 0;
-  for (const [name, stats] of Object.entries(standings)) {
-    const score = teamMatchScore(teamName, name);
-    if (score > bestScore) { bestScore = score; best = { stats, matchedName: name, score }; }
-  }
-  return bestScore >= 0.5 ? best : null;
-}
+const SPORT_LABELS = {
+  soccer_france_ligue_one: "Ligue 1 🇫🇷",
+  soccer_france_ligue_2: "Ligue 2 🇫🇷",
+  soccer_france_ligue_nationale: "National 🇫🇷",
+  soccer_epl: "Premier League 🏴󠁧󠁢󠁥󠁳󠁣󠁴󠁿",
+  soccer_england_championship: "Championship 🏴󠁧󠁢󠁥󠁳󠁣󠁴󠁿",
+  soccer_england_league1: "League One 🏴󠁧󠁢󠁥󠁳󠁣󠁴󠁿",
+  soccer_england_league2: "League Two 🏴󠁧󠁢󠁥󠁳󠁣󠁴󠁿",
+  soccer_spain_la_liga: "La Liga 🇪🇸",
+  soccer_spain_segunda_division: "Segunda 🇪🇸",
+  soccer_germany_bundesliga: "Bundesliga 🇩🇪",
+  soccer_germany_bundesliga2: "2. Bundesliga 🇩🇪",
+  soccer_italy_serie_a: "Serie A 🇮🇹",
+  soccer_italy_serie_b: "Serie B 🇮🇹",
+  soccer_uefa_champs_league: "Champions League ⭐",
+  soccer_uefa_europa_league: "Europa League",
+  soccer_netherlands_eredivisie: "Eredivisie 🇳🇱",
+  soccer_belgium_first_div: "Pro League 🇧🇪",
+  soccer_portugal_primeira_liga: "Primeira Liga 🇵🇹",
+  soccer_turkey_super_league: "Süper Lig 🇹🇷",
+  soccer_scotland_premiership: "Premiership 🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+  soccer_greece_super_league: "Super League 🇬🇷",
+  soccer_usa_mls: "MLS 🇺🇸",
+  soccer_brazil_campeonato: "Brasileirão 🇧🇷",
+  soccer_argentina_primera_division: "Liga Profesional 🇦🇷",
+  soccer_mexico_ligamx: "Liga MX 🇲🇽",
+  soccer_denmark_superliga: "Superliga 🇩🇰",
+  soccer_sweden_allsvenskan: "Allsvenskan 🇸🇪",
+  soccer_norway_eliteserien: "Eliteserien 🇳🇴",
+  soccer_switzerland_superleague: "Super League 🇨🇭",
+  soccer_switzerland_challenge_league: "Challenge League 🇨🇭",
+  soccer_austria_bundesliga: "Bundesliga 🇦🇹",
+  soccer_ireland_premier_division: "Premier Division 🇮🇪",
+  soccer_russia_fpl: "FNL 🇷🇺",
+  soccer_australia_aleague: "A-League 🇦🇺",
+  soccer_japan_j_league: "J1 League 🇯🇵",
+};
 
-// ─── Fetch standings ──────────────────────────────────────────────────────────
-async function fetchFootballAPI(endpoint) {
-  const res = await fetch(`https://v3.football.api-sports.io/${endpoint}`, {
-    headers: { "x-apisports-key": FOOTBALL_API_KEY },
-  });
-  if (!res.ok) throw new Error(`API-Football error: ${res.status}`);
-  return (await res.json()).response;
-}
-
-async function getStandings(leagueId, season) {
-  const key = `standings_${leagueId}_${season}`;
-  const cached = getCache(key);
-  if (cached) return cached;
-
-  const data = await fetchFootballAPI(`standings?league=${leagueId}&season=${season}`);
-  const standings = {};
-  const groups = data?.[0]?.league?.standings || [];
-  groups.forEach(group => {
-    group.forEach(team => {
-      standings[team.team.name] = {
-        rank: team.rank,
-        points: team.points,
-        played: team.all.played,
-        win: team.all.win,
-        draw: team.all.draw,
-        lose: team.all.lose,
-        goalsFor: team.all.goals.for,
-        goalsAgainst: team.all.goals.against,
-        form: team.form || "",
-        homeWin: team.home?.win || 0,
-        homePlayed: team.home?.played || 0,
-        awayWin: team.away?.win || 0,
-        awayPlayed: team.away?.played || 0,
-        homeGoalsFor: team.home?.goals?.for || 0,
-        awayGoalsFor: team.away?.goals?.for || 0,
-        homeGoalsAgainst: team.home?.goals?.against || 0,
-        awayGoalsAgainst: team.away?.goals?.against || 0,
-      };
-    });
-  });
-
-  setCache(key, standings, 6 * 60 * 60 * 1000); // 6h
-  return standings;
-}
-
-// ─── Modèle probabilités ─────────────────────────────────────────────────────
-function formScore(formStr) {
-  if (!formStr) return 0.45;
-  const last5 = formStr.slice(-5);
-  let s = 0, c = 0;
-  for (const ch of last5) { if (ch === "W") s += 1; else if (ch === "D") s += 0.5; c++; }
-  return c > 0 ? s / c : 0.45;
-}
-
-function calcModelProbsForGame(homeTeam, awayTeam, standings) {
-  const hM = findTeamInStandings(homeTeam, standings);
-  const aM = findTeamInStandings(awayTeam, standings);
-  if (!hM || !aM) return null;
-  const h = hM.stats, a = aM.stats;
-  const maxPts = Math.max(h.played, a.played, 1) * 3;
-  const homeXG = (h.homePlayed > 0 ? h.homeGoalsFor / h.homePlayed : 1.4)
-    * ((a.awayPlayed > 0 ? a.awayGoalsAgainst / a.awayPlayed : 1.6) / 1.4);
-  const awayXG = (a.awayPlayed > 0 ? a.awayGoalsFor / a.awayPlayed : 1.0)
-    * ((h.homePlayed > 0 ? h.homeGoalsAgainst / h.homePlayed : 1.2) / 1.2);
-  const hS = (h.points / maxPts * 0.40) + (formScore(h.form) * 0.35) + (Math.min(homeXG, 3) / 3 * 0.25);
-  const aS = (a.points / maxPts * 0.40) + (formScore(a.form) * 0.35) + (Math.min(awayXG, 3) / 3 * 0.25);
-  const tot = hS + aS;
-  const rawH = (hS / tot) * 0.73 + 0.06, rawA = (aS / tot) * 0.73, rawD = 0.27;
-  const rawTot = rawH + rawA + rawD;
-  return {
-    home:            Math.max(0.10, Math.min(0.75, rawH / rawTot)),
-    away:            Math.max(0.10, Math.min(0.65, rawA / rawTot)),
-    draw:            Math.max(0.15, Math.min(0.35, rawD / rawTot)),
-    homeRank:        hM.stats.rank,
-    awayRank:        aM.stats.rank,
-    homeForm:        h.form?.slice(-5) || "",
-    awayForm:        a.form?.slice(-5) || "",
-    homePpg:         parseFloat((h.points / Math.max(h.played, 1)).toFixed(2)),
-    awayPpg:         parseFloat((a.points / Math.max(a.played, 1)).toFixed(2)),
-    rankGap:         Math.abs(hM.stats.rank - aM.stats.rank),
-    matchConfidence: Math.min(hM.score, aM.score),
-  };
-}
-
-// ─── Odds helpers ─────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function americanToDecimal(o) {
   const n = parseFloat(o);
   return n >= 0 ? n / 100 + 1 : 100 / Math.abs(n) + 1;
@@ -164,208 +113,284 @@ function decimalToAmerican(d) {
   return d >= 2 ? `+${Math.round((d - 1) * 100)}` : `${Math.round(-100 / (d - 1))}`;
 }
 
-// ─── Combos ───────────────────────────────────────────────────────────────────
-function combinations(arr, k) {
-  if (k === 0) return [[]];
-  if (arr.length < k) return [];
-  const [head, ...tail] = arr;
-  return [
-    ...combinations(tail, k - 1).map(c => [head, ...c]),
-    ...combinations(tail, k),
-  ];
+// ─── API-Football ─────────────────────────────────────────────────────────────
+async function fbFetch(endpoint) {
+  if (!FB_KEY) return null;
+  try {
+    const r = await fetch(`https://v3.football.api-sports.io/${endpoint}`, {
+      headers: { "x-apisports-key": FB_KEY },
+      timeout: 10000,
+    });
+    if (!r.ok) return null;
+    return (await r.json()).response;
+  } catch { return null; }
+}
+
+async function getStandings(leagueId, season) {
+  const key = `standings_${leagueId}_${season}`;
+  const cached = getCache(key);
+  if (cached) return cached;
+  const data = await fbFetch(`standings?league=${leagueId}&season=${season}`);
+  if (!data) return null;
+  const table = {};
+  const groups = data?.[0]?.league?.standings || [];
+  groups.forEach(group => {
+    group.forEach(t => {
+      const played = Math.max(t.all?.played || 1, 1);
+      table[t.team.name] = {
+        rank: t.rank, points: t.points, played,
+        ppg: parseFloat((t.points / played).toFixed(2)),
+        form: (t.form || "").slice(-5),
+        gpgFor: parseFloat(((t.all?.goals?.for || 0) / played).toFixed(2)),
+        gpgAgainst: parseFloat(((t.all?.goals?.against || 0) / played).toFixed(2)),
+        homePlayed: t.home?.played || 0,
+        homeWin: t.home?.win || 0,
+        homeGoalsFor: t.home?.goals?.for || 0,
+        homeGoalsAgainst: t.home?.goals?.against || 0,
+        awayPlayed: t.away?.played || 0,
+        awayWin: t.away?.win || 0,
+        awayGoalsFor: t.away?.goals?.for || 0,
+        awayGoalsAgainst: t.away?.goals?.against || 0,
+      };
+    });
+  });
+  setCache(key, table, 6 * 60 * 60 * 1000);
+  return table;
+}
+
+// ─── Team matching ────────────────────────────────────────────────────────────
+function normName(name) {
+  return name.toLowerCase()
+    .replace(/\b(fc|cf|sc|ac|as|rc|ss|afc|utd|united|city|town|sporting|athletic|real|club|calcio|inter|atletico|stade|olympique|racing)\b/g, "")
+    .replace(/^(1\.|vfb|vfl|rb|bvb|sv|fsv|tsg|tsv)\s+/g, "")
+    .replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+}
+function matchScore(a, b) {
+  const na = normName(a), nb = normName(b);
+  if (na === nb) return 1.0;
+  if (na.includes(nb) || nb.includes(na)) return 0.9;
+  const wa = na.split(" ").filter(w => w.length > 2);
+  const wb = nb.split(" ").filter(w => w.length > 2);
+  if (!wa.length || !wb.length) return 0;
+  return wa.filter(w => wb.includes(w)).length / Math.max(wa.length, wb.length);
+}
+function findTeam(name, table) {
+  if (!table) return null;
+  let best = null, bestScore = 0;
+  for (const [key, val] of Object.entries(table)) {
+    const s = matchScore(name, key);
+    if (s > bestScore) { bestScore = s; best = val; }
+  }
+  return bestScore >= 0.45 ? best : null;
+}
+
+// ─── Model ────────────────────────────────────────────────────────────────────
+function formScore(f) {
+  if (!f) return 0.45;
+  const chars = f.slice(-5).split("");
+  const weights = [1, 1.2, 1.4, 1.6, 2.0].slice(-chars.length);
+  const totalW = weights.reduce((a, b) => a + b, 0);
+  const pts = { W: 3, D: 1, L: 0 };
+  return chars.reduce((s, c, i) => s + (pts[c] || 0) * weights[i], 0) / (3 * totalW);
+}
+
+function computeProbs(homeTeam, awayTeam, table) {
+  const h = findTeam(homeTeam, table);
+  const a = findTeam(awayTeam, table);
+  if (!h || !a) return null;
+  const homeXG = (h.homePlayed > 0 ? h.homeGoalsFor / h.homePlayed : 1.4) * ((a.awayPlayed > 0 ? a.awayGoalsAgainst / a.awayPlayed : 1.6) / 1.4);
+  const awayXG = (a.awayPlayed > 0 ? a.awayGoalsFor / a.awayPlayed : 1.0) * ((h.homePlayed > 0 ? h.homeGoalsAgainst / h.homePlayed : 1.2) / 1.2);
+  const maxPts = Math.max(h.played, a.played, 1) * 3;
+  const hS = (h.points / maxPts * 0.35) + (formScore(h.form) * 0.30) + (Math.min(homeXG, 3) / 3 * 0.20) + 0.06;
+  const aS = (a.points / maxPts * 0.35) + (formScore(a.form) * 0.30) + (Math.min(awayXG, 3) / 3 * 0.20);
+  const tot = hS + aS;
+  const rawH = (hS / tot) * 0.73 + 0.06, rawA = (aS / tot) * 0.73, rawD = 0.27;
+  const rawTot = rawH + rawA + rawD;
+  return {
+    home: Math.max(0.08, Math.min(0.78, rawH / rawTot)),
+    away: Math.max(0.08, Math.min(0.68, rawA / rawTot)),
+    draw: Math.max(0.14, Math.min(0.36, rawD / rawTot)),
+    homeStats: {
+      rank: h.rank, ppg: h.ppg, form: h.form,
+      gpgFor: h.gpgFor, gpgAgainst: h.gpgAgainst,
+      homeWinRate: h.homePlayed > 0 ? parseFloat((h.homeWin / h.homePlayed).toFixed(2)) : null,
+    },
+    awayStats: {
+      rank: a.rank, ppg: a.ppg, form: a.form,
+      gpgFor: a.gpgFor, gpgAgainst: a.gpgAgainst,
+      awayWinRate: a.awayPlayed > 0 ? parseFloat((a.awayWin / a.awayPlayed).toFixed(2)) : null,
+    },
+    rankGap: Math.abs(h.rank - a.rank),
+    totalTeams: Object.keys(table).length,
+  };
+}
+
+// ─── Enrich raw matches ───────────────────────────────────────────────────────
+function enrichMatches(rawMatches, sportKey, standings) {
+  const results = [];
+  for (const m of rawMatches) {
+    const home = m.home_team, away = m.away_team;
+    const best = { home: null, away: null, draw: null };
+    for (const bm of m.bookmakers || []) {
+      for (const mkt of bm.markets || []) {
+        if (mkt.key !== "h2h") continue;
+        for (const oc of mkt.outcomes || []) {
+          const p = oc.price;
+          if (oc.name === home  && (best.home === null || p > best.home))  best.home  = p;
+          else if (oc.name === away && (best.away === null || p > best.away))  best.away  = p;
+          else if (oc.name === "Draw" && (best.draw === null || p > best.draw)) best.draw  = p;
+        }
+      }
+    }
+    if (best.home === null || best.away === null) continue;
+    const ip = {
+      home: parseFloat(americanToImplied(best.home).toFixed(4)),
+      away: parseFloat(americanToImplied(best.away).toFixed(4)),
+      ...(best.draw != null ? { draw: parseFloat(americanToImplied(best.draw).toFixed(4)) } : {}),
+    };
+    const md = standings ? computeProbs(home, away, standings) : null;
+    results.push({
+      id: m.id, sport: sportKey,
+      sportLabel: SPORT_LABELS[sportKey] || sportKey,
+      homeTeam: home, awayTeam: away,
+      commenceTime: m.commence_time,
+      odds: best, impliedProb: ip,
+      modelProb: md ? { home: md.home, away: md.away, draw: md.draw } : null,
+      value: md ? {
+        home: parseFloat((md.home - ip.home).toFixed(4)),
+        away: parseFloat((md.away - ip.away).toFixed(4)),
+      } : null,
+      homeStats: md?.homeStats || null,
+      awayStats: md?.awayStats || null,
+      rankGap: md?.rankGap ?? null,
+      totalTeams: md?.totalTeams ?? null,
+      hasModel: !!md,
+    });
+  }
+  return results;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ROUTES EXISTANTES
+// ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
-app.get("/", (req, res) => {
-  res.json({ status: "ParlayEdge API running ✅" });
+app.get("/", (req, res) => res.json({ status: "ParlayEdge API running ✅" }));
+
+// Toutes les ligues soccer disponibles sur le compte
+app.get("/api/sports", async (req, res) => {
+  if (!ODDS_KEY) return res.status(500).json({ error: "ODDS_API_KEY missing" });
+  const key = "sports_list";
+  const cached = getCache(key);
+  if (cached) return res.json(cached);
+  try {
+    const r = await fetch(`https://api.the-odds-api.com/v4/sports?apiKey=${ODDS_KEY}`, { timeout: 10000 });
+    if (!r.ok) throw new Error(`${r.status}`);
+    const data = await r.json();
+    const sports = data
+      .filter(s => s.group === "Soccer" && s.active)
+      .map(s => ({
+        key: s.key,
+        label: SPORT_LABELS[s.key] || s.title,
+        hasModel: !!LEAGUE_MAP[s.key],
+      }));
+    const result = { sports, count: sports.length };
+    setCache(key, result, 24 * 60 * 60 * 1000);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
+// Cotes + stats pour une ligue
 app.get("/api/odds", async (req, res) => {
-  const { sport, markets = "h2h", regions = "us", bookmakers = "betonlineag" } = req.query;
-  if (!sport) return res.status(400).json({ error: "sport param required" });
-  if (!ODDS_API_KEY) return res.status(500).json({ error: "ODDS_API_KEY not configured" });
-  try {
-    const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${ODDS_API_KEY}&regions=${regions}&markets=${markets}&bookmakers=${bookmakers}&oddsFormat=american`;
-    const response = await fetch(url);
-    const remaining = response.headers.get("x-requests-remaining");
-    const used = response.headers.get("x-requests-used");
-    if (!response.ok) {
-      const err = await response.json();
-      return res.status(response.status).json({ error: err.message || "Odds API error" });
-    }
-    const data = await response.json();
-    res.json({ data, meta: { remainingRequests: remaining ? parseInt(remaining) : null, usedRequests: used ? parseInt(used) : null } });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/api/model/:sport", async (req, res) => {
-  const { sport } = req.params;
-  const league = LEAGUE_MAP[sport];
-  if (!league) return res.status(400).json({ error: "Ligue non supportee" });
-  if (!FOOTBALL_API_KEY) return res.status(500).json({ error: "FOOTBALL_API_KEY not configured" });
-  try {
-    const standings = await getStandings(league.id, league.season);
-    res.json({ standings, totalTeams: Object.keys(standings).length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/api/debug/match", async (req, res) => {
-  const { team, sport } = req.query;
-  const league = LEAGUE_MAP[sport];
-  if (!league) return res.status(400).json({ error: "sport invalide" });
-  const standings = await getStandings(league.id, league.season);
-  const result = findTeamInStandings(team, standings);
-  res.json({ searched: team, result, allTeams: Object.keys(standings) });
-});
-
-// ═════════════════════════════════════════════════════════════════════════════
-// PARLAY OPTIMIZER — nouvelles routes
-// ═════════════════════════════════════════════════════════════════════════════
-
-// GET /api/parlay/upcoming
-// Fetch matchs à venir (toutes ligues) + enrichit avec value model
-// Query: sports (comma-sep), days (int, défaut 2), season (int, défaut 2024)
-app.get("/api/parlay/upcoming", async (req, res) => {
-  if (!ODDS_API_KEY) return res.status(500).json({ error: "ODDS_API_KEY not configured" });
-
-  const sportKeys = req.query.sports
-    ? req.query.sports.split(",").map(s => s.trim()).filter(Boolean)
-    : Object.keys(LEAGUE_MAP);
-  const season = parseInt(req.query.season || 2024);
-  const days   = parseInt(req.query.days   || 2);
-
-  const allMatches = [];
-
-  for (const sportKey of sportKeys) {
-    const leagueConf = LEAGUE_MAP[sportKey];
-
-    // 1. Cotes via The Odds API ─────────────────────────────────────────────
-    let rawMatches = [];
+  const { sport, days = 2 } = req.query;
+  if (!sport || !ODDS_KEY) return res.status(400).json({ error: "sport + ODDS_API_KEY requis" });
+  const cacheKey = `odds_${sport}_${days}`;
+  let raw = getCache(cacheKey);
+  if (!raw) {
     try {
-      const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=h2h&oddsFormat=american&daysFrom=${days}`;
+      const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${ODDS_KEY}&regions=us&markets=h2h&oddsFormat=american&daysFrom=${days}`;
       const r = await fetch(url, { timeout: 10000 });
-      if (!r.ok) continue;
-      rawMatches = await r.json();
-    } catch (e) {
-      console.warn(`[parlay] odds fetch failed for ${sportKey}:`, e.message);
-      continue;
-    }
-
-    // 2. Standings API-Football ────────────────────────────────────────────
-    let standings = null;
-    if (leagueConf && FOOTBALL_API_KEY) {
-      try {
-        standings = await getStandings(leagueConf.id, leagueConf.season || season);
-      } catch (e) {
-        console.warn(`[parlay] standings failed for ${sportKey}:`, e.message);
-      }
-    }
-
-    // 3. Enrichir chaque match ─────────────────────────────────────────────
-    for (const m of rawMatches.slice(0, 25)) {
-      const home = m.home_team;
-      const away = m.away_team;
-
-      // Meilleures cotes tous bookmakers confondus
-      const best = { home: null, away: null, draw: null };
-      for (const bm of m.bookmakers || []) {
-        for (const mkt of bm.markets || []) {
-          if (mkt.key !== "h2h") continue;
-          for (const oc of mkt.outcomes || []) {
-            const p = oc.price;
-            if (oc.name === home  && (best.home === null || p > best.home))  best.home  = p;
-            else if (oc.name === away && (best.away === null || p > best.away))  best.away  = p;
-            else if (oc.name === "Draw" && (best.draw === null || p > best.draw)) best.draw = p;
-          }
-        }
-      }
-      if (best.home === null || best.away === null) continue;
-
-      // Probs implicites
-      const impliedProb = {
-        home: parseFloat(americanToImplied(best.home).toFixed(4)),
-        away: parseFloat(americanToImplied(best.away).toFixed(4)),
-        ...(best.draw != null ? { draw: parseFloat(americanToImplied(best.draw).toFixed(4)) } : {}),
-      };
-
-      // Probs modèle + value edge
-      const realProb = standings ? calcModelProbsForGame(home, away, standings) : null;
-      const value = realProb ? {
-        home: parseFloat((realProb.home - impliedProb.home).toFixed(4)),
-        away: parseFloat((realProb.away - impliedProb.away).toFixed(4)),
-      } : null;
-
-      allMatches.push({
-        id:           m.id,
-        sport:        sportKey,
-        homeTeam:     home,
-        awayTeam:     away,
-        commenceTime: m.commence_time,
-        odds:         best,
-        impliedProb,
-        realProb,
-        value,
-      });
-    }
+      if (!r.ok) { const e = await r.json(); return res.status(r.status).json({ error: e.message || "Odds API error" }); }
+      raw = await r.json();
+      if (raw.length) setCache(cacheKey, raw, 15 * 60 * 1000);
+    } catch (e) { return res.status(500).json({ error: e.message }); }
   }
+  const leagueConf = LEAGUE_MAP[sport];
+  const standings = leagueConf && FB_KEY ? await getStandings(leagueConf.id, leagueConf.season) : null;
+  const matches = enrichMatches(raw, sport, standings);
+  matches.sort((a, b) => {
+    const va = a.value ? Math.max(a.value.home ?? -99, a.value.away ?? -99) : -99;
+    const vb = b.value ? Math.max(b.value.home ?? -99, b.value.away ?? -99) : -99;
+    return vb - va;
+  });
+  res.json({ matches, count: matches.length, hasModel: !!standings });
+});
 
-  // Trier: meilleur value edge en premier
+// Batch: plusieurs ligues en un appel
+app.post("/api/odds/batch", async (req, res) => {
+  const { sports = [], days = 2 } = req.body;
+  if (!ODDS_KEY || !sports.length) return res.json({ matches: [] });
+  const allMatches = [];
+  const chunks = [];
+  for (let i = 0; i < sports.length; i += 4) chunks.push(sports.slice(i, i + 4));
+  for (const chunk of chunks) {
+    await Promise.all(chunk.map(async sportKey => {
+      const cacheKey = `odds_${sportKey}_${days}`;
+      let raw = getCache(cacheKey);
+      if (!raw) {
+        try {
+          const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?apiKey=${ODDS_KEY}&regions=us&markets=h2h&oddsFormat=american&daysFrom=${days}`;
+          const r = await fetch(url, { timeout: 10000 });
+          if (!r.ok) return;
+          raw = await r.json();
+          if (raw.length) setCache(cacheKey, raw, 15 * 60 * 1000);
+        } catch { return; }
+      }
+      const leagueConf = LEAGUE_MAP[sportKey];
+      const standings = leagueConf && FB_KEY ? await getStandings(leagueConf.id, leagueConf.season) : null;
+      allMatches.push(...enrichMatches(raw, sportKey, standings));
+    }));
+  }
   allMatches.sort((a, b) => {
     const va = a.value ? Math.max(a.value.home ?? -99, a.value.away ?? -99) : -99;
     const vb = b.value ? Math.max(b.value.home ?? -99, b.value.away ?? -99) : -99;
     return vb - va;
   });
-
   res.json({ matches: allMatches, count: allMatches.length });
 });
 
-
-// POST /api/parlay/build
-// Génère toutes les combos k-legs depuis une liste de picks
-// Body: { picks: [{team, odds, matchup?, valueEdge?}], legSize: int, stake: float }
+// Build parlays
 app.post("/api/parlay/build", (req, res) => {
   const { picks = [], legSize = 3, stake = 20 } = req.body;
-
-  if (picks.length < legSize) {
-    return res.status(400).json({ error: `Besoin d'au moins ${legSize} picks`, parlays: [] });
+  if (picks.length < legSize) return res.status(400).json({ error: `Besoin de ${legSize} picks minimum` });
+  function combos(arr, k) {
+    if (k === 0) return [[]];
+    if (arr.length < k) return [];
+    const [h, ...t] = arr;
+    return [...combos(t, k - 1).map(c => [h, ...c]), ...combos(t, k)];
   }
-
-  const parlays = combinations(picks, legSize).map(legs => {
-    const dec  = legs.reduce((acc, p) => acc * americanToDecimal(p.odds), 1);
-    const win  = stake * dec - stake;
+  const parlays = combos(picks, legSize).map(legs => {
+    const dec = legs.reduce((a, p) => a * americanToDecimal(p.odds), 1);
+    const win = stake * dec - stake;
     const edges = legs.map(l => l.valueEdge).filter(v => v != null);
-    const avgEdge = edges.length ? edges.reduce((a, b) => a + b, 0) / edges.length : null;
+    const mps   = legs.map(l => l.modelProb).filter(v => v != null);
     return {
       legs,
-      decimalOdds:  parseFloat(dec.toFixed(4)),
+      decimalOdds: parseFloat(dec.toFixed(4)),
       americanOdds: decimalToAmerican(dec),
       potentialWin: parseFloat(win.toFixed(2)),
-      totalPayout:  parseFloat((stake + win).toFixed(2)),
-      avgEdge:      avgEdge != null ? parseFloat(avgEdge.toFixed(4)) : null,
+      totalPayout: parseFloat((stake + win).toFixed(2)),
+      avgEdge: edges.length ? parseFloat((edges.reduce((a,b)=>a+b,0)/edges.length).toFixed(4)) : null,
+      combinedModelProb: mps.length === legs.length ? parseFloat(mps.reduce((a,b)=>a*b,1).toFixed(4)) : null,
     };
   });
-
-  // +EV en premier, puis par cotes
   parlays.sort((a, b) => {
     const aPos = (a.avgEdge ?? -99) > 0 ? 1 : 0;
     const bPos = (b.avgEdge ?? -99) > 0 ? 1 : 0;
-    if (bPos !== aPos) return bPos - aPos;
-    return b.decimalOdds - a.decimalOdds;
+    return bPos !== aPos ? bPos - aPos : b.decimalOdds - a.decimalOdds;
   });
-
   res.json({ parlays, count: parlays.length, stake });
 });
 
-// ═════════════════════════════════════════════════════════════════════════════
-
-app.listen(PORT, () => {
-  console.log(`ParlayEdge backend running on port ${PORT}`);
-  console.log(`Parlay Optimizer: GET /api/parlay/upcoming · POST /api/parlay/build`);
-});
+app.listen(PORT, () => console.log(`ParlayEdge API on port ${PORT}`));
