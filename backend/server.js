@@ -126,11 +126,31 @@ async function fbFetch(endpoint) {
   } catch { return null; }
 }
 
+// Cache des saisons courantes par ligue
+const currentSeasonCache = new Map();
+
+async function getCurrentSeason(leagueId) {
+  if (currentSeasonCache.has(leagueId)) return currentSeasonCache.get(leagueId);
+  try {
+    const data = await fbFetch(`leagues?id=${leagueId}&current=true`);
+    if (!data || !data.length) return null;
+    const seasons = data[0]?.seasons || [];
+    const current = seasons.find(s => s.current === true);
+    if (current) {
+      currentSeasonCache.set(leagueId, current.year);
+      return current.year;
+    }
+  } catch (e) {}
+  return null;
+}
+
 async function getStandings(leagueId, season) {
-  const key = `standings_${leagueId}_${season}`;
+  // Auto-detect current season instead of using hardcoded value
+  const activeSeason = await getCurrentSeason(leagueId) || season;
+  const key = `standings_${leagueId}_${activeSeason}`;
   const cached = getCache(key);
   if (cached) return cached;
-  const data = await fbFetch(`standings?league=${leagueId}&season=${season}`);
+  const data = await fbFetch(`standings?league=${leagueId}&season=${activeSeason}`);
   if (!data) return null;
   const groups = data?.[0]?.league?.standings || [];
   if (!groups.length) return null;
@@ -437,8 +457,4 @@ app.get("/api/debug/standings/:sport", async (req, res) => {
     const teams = Object.entries(standings)
       .sort((a, b) => a[1].rank - b[1].rank)
       .map(([name, s]) => ({ name, rank: s.rank, points: s.points, played: s.played, ppg: s.ppg }));
-    res.json({ league, count: teams.length, teams });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.listen(PORT, () => console.log(`ParlayEdge API on port ${PORT}`));
+    res.json({ l
