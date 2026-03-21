@@ -159,9 +159,13 @@ async function getStandings(leagueId, season) {
   // Évite de merger groupes playoffs/relégation qui faussent les rangs
   const mainGroup = groups.reduce((best, g) => g.length > best.length ? g : best, groups[0]);
 
-  // Valider que c'est un vrai classement (min 8 équipes, min 5 matchs joués)
+  // Valider que c'est un vrai classement:
+  // - min 8 équipes avec matchs joués
+  // - moyenne de matchs joués >= 10 (évite début de saison MLS etc.)
   const validTeams = mainGroup.filter(t => (t.all?.played || 0) >= 5);
   if (validTeams.length < 8) return null;
+  const avgPlayed = validTeams.reduce((s, t) => s + (t.all?.played || 0), 0) / validTeams.length;
+  if (avgPlayed < 10) return null; // Trop tôt dans la saison
 
   const table = {};
   validTeams.forEach(t => {
@@ -453,8 +457,4 @@ app.get("/api/debug/standings/:sport", async (req, res) => {
     const key = `standings_${league.id}_${league.season}`;
     cache.delete(key);
     const standings = await getStandings(league.id, league.season);
-    if (!standings) return res.json({ error: "no standings", league });
-    const teams = Object.entries(standings)
-      .sort((a, b) => a[1].rank - b[1].rank)
-      .map(([name, s]) => ({ name, rank: s.rank, points: s.points, played: s.played, ppg: s.ppg }));
-    res.json({ l
+    if (!standings) return res.json({ error:
