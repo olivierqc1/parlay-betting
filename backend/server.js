@@ -458,4 +458,4 @@ app.get("/api/debug/standings/:sport", async (req, res) => {
     const key = `standings_${league.id}_${league.season}`;
     cache.delete(key);
     const standings = await getStandings(league.id, league.season);
-    if (!s
+    if (!s 
