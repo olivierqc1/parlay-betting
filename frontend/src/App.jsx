@@ -1,7 +1,8 @@
 // frontend/src/App.jsx
 import { useState, useEffect, useCallback, useMemo } from "react";
 import ParlayOptimizer from "./ParlayOptimizer";
-import { MatchCard, ParlayCard, BuilderTab, HistoryTab, americanToDecimal, getCombinations } from "./AppComponents";
+import { MatchCard, ParlayCard, americanToDecimal, getCombinations } from "./AppComponents1";
+import { BuilderTab, HistoryTab } from "./AppComponents2";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
 const HISTORY_KEY = "parlayedge_history_v2";
@@ -142,7 +143,7 @@ export default function App() {
       {activeTab !== "optimizer" && (
         <div style={{ background:"#0a0f1c", borderBottom:"1px solid #1a2035", padding:"10px 20px" }}>
           {sportsLoading ? (
-            <div style={{ fontSize:10, color:"#445" }}>Chargement des ligues disponibles...</div>
+            <div style={{ fontSize:10, color:"#445" }}>Chargement des ligues...</div>
           ) : (
             <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:8 }}>
               {allSports.map(s => {
@@ -181,7 +182,7 @@ export default function App() {
                 <button onClick={() => setFilterEV(v=>!v)} style={{ background:filterEV?"#00ff8818":"transparent", color:filterEV?"#00ff88":"#445", border:`1px solid ${filterEV?"#00ff8840":"#1e2535"}`, borderRadius:4, padding:"4px 10px", cursor:"pointer", fontSize:10 }}>+EV seulement</button>
               </div>
             )}
-            {loading && <div style={{ textAlign:"center", color:"#445", padding:40 }}>Analyse de {selectedSports.length} ligues en cours...</div>}
+            {loading && <div style={{ textAlign:"center", color:"#445", padding:40 }}>Analyse de {selectedSports.length} ligues...</div>}
             {!loading && !error && matches.length === 0 && <div style={{ textAlign:"center", color:"#334", padding:40 }}>Sélectionne des ligues et charge les matchs</div>}
             {sortedMatches.map(m => <MatchCard key={m.id} match={m} picks={picks} onPick={addPick} />)}
           </div>
