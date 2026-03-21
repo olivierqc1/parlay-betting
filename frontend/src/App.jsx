@@ -1,392 +1,573 @@
-import { useState, useCallback, useEffect } from "react";
-import ParlayOptimizer from "./ParlayOptimizer";
+// frontend/src/AppComponents.jsx
+// ── Tous les sous-composants de ParlayEdge ──
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
-const HISTORY_KEY = "parlayedge_history";
+// ─── Utils ────────────────────────────────────────────────────────────────────
+export const fmtAmerican = n => n > 0 ? `+${Math.round(n)}` : `${Math.round(n)}`;
+export const fmtPct = p => `${(p * 100).toFixed(1)}%`;
+export const fmtDate = ts => new Date(ts).toLocaleDateString("fr-CA", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-const LEAGUES = [
-  { key: "soccer_epl",                label: "Premier League",   flag: "PL" },
-  { key: "soccer_uefa_champs_league", label: "Champions League", flag: "CL" },
-  { key: "soccer_spain_la_liga",      label: "La Liga",          flag: "ES" },
-  { key: "soccer_germany_bundesliga", label: "Bundesliga",       flag: "DE" },
-  { key: "soccer_italy_serie_a",      label: "Serie A",          flag: "IT" },
-  { key: "soccer_france_ligue_one",   label: "Ligue 1",          flag: "FR1" },
-  { key: "soccer_france_ligue_2",     label: "Ligue 2",          flag: "FR2" },
-  { key: "soccer_france_ligue_nationale", label: "National",     flag: "FRN" },
-  { key: "soccer_usa_mls",            label: "MLS",              flag: "US" },
-];
-
-function americanToDecimal(odds) {
-  return odds > 0 ? odds / 100 + 1 : 100 / Math.abs(odds) + 1;
+export function americanToDecimal(o) {
+  const n = parseFloat(o);
+  return n >= 0 ? n / 100 + 1 : 100 / Math.abs(n) + 1;
 }
-function calcNoVigProbs(outcomes) {
-  const raw = outcomes.map(o => 1 / americanToDecimal(o.price));
-  const total = raw.reduce((a, b) => a + b, 0);
-  return raw.map(p => p / total);
-}
-function calcCombinedDecimal(legs) {
-  return legs.reduce((acc, l) => acc * americanToDecimal(l.price), 1);
-}
-function fmtAmerican(odds) {
-  return odds > 0 ? "+" + Math.round(odds) : "" + Math.round(odds);
-}
-function fmtPct(p) { return (p * 100).toFixed(1) + "%"; }
-function evColor(ev) {
-  if (ev > 0.05) return "#00ff88";
-  if (ev > 0) return "#88ffcc";
-  if (ev > -0.05) return "#ffcc44";
-  return "#ff5555";
-}
-function edgeColor(edge) {
-  if (edge > 0.04) return "#00ff88";
-  if (edge > 0.01) return "#88ffcc";
-  if (edge > -0.02) return "#ffcc44";
-  return "#ff5555";
-}
-function confidenceLabel(prob) {
-  if (prob >= 0.68) return { label: "TRÈS SÛR", color: "#00ff88" };
-  if (prob >= 0.58) return { label: "SÛR",      color: "#88ffcc" };
-  if (prob >= 0.50) return { label: "PROBABLE", color: "#ffcc44" };
-  return                    { label: "RISQUÉ",   color: "#ff5555" };
-}
-
-function normalizeName(name) {
-  return name.toLowerCase()
-    .replace(/\b(fc|cf|sc|ac|as|rc|ss|afc|utd|united|city|town|sporting|athletic|real|club|calcio|inter|atletico)\b/g, "")
-    .replace(/^(1\.|vfb|vfl|rb|bvb|sv|fsv|tsg|tsv|sc|fc|ac|as|ss|rc)\s+/g, "")
-    .replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
-}
-function teamMatchScore(nameA, nameB) {
-  const a = normalizeName(nameA), b = normalizeName(nameB);
-  if (a === b) return 1.0;
-  if (a.includes(b) || b.includes(a)) return 0.9;
-  const wA = a.split(" ").filter(w => w.length > 2);
-  const wB = b.split(" ").filter(w => w.length > 2);
-  if (!wA.length || !wB.length) return 0;
-  return wA.filter(w => wB.includes(w)).length / Math.max(wA.length, wB.length);
-}
-function findTeamInStandings(teamName, standings) {
-  let best = null, bestScore = 0;
-  for (const [name, stats] of Object.entries(standings)) {
-    const score = teamMatchScore(teamName, name);
-    if (score > bestScore) { bestScore = score; best = { stats, matchedName: name, score }; }
-  }
-  return bestScore >= 0.5 ? best : null;
-}
-
-function calcModelProbsForGame(homeTeam, awayTeam, standings) {
-  const hM = findTeamInStandings(homeTeam, standings);
-  const aM = findTeamInStandings(awayTeam, standings);
-  if (!hM || !aM) return null;
-  const h = hM.stats, a = aM.stats;
-  const maxPts = Math.max(h.played, a.played, 1) * 3;
-  function formScore(f) {
-    if (!f) return 0.45;
-    const last5 = f.slice(-5); let s = 0, c = 0;
-    for (const ch of last5) { if (ch === "W") s += 1; else if (ch === "D") s += 0.5; c++; }
-    return c > 0 ? s / c : 0.45;
-  }
-  const homeXG = (h.homePlayed > 0 ? h.homeGoalsFor / h.homePlayed : 1.4)
-    * ((a.awayPlayed > 0 ? a.awayGoalsAgainst / a.awayPlayed : 1.6) / 1.4);
-  const awayXG = (a.awayPlayed > 0 ? a.awayGoalsFor / a.awayPlayed : 1.0)
-    * ((h.homePlayed > 0 ? h.homeGoalsAgainst / h.homePlayed : 1.2) / 1.2);
-  const hS = (h.points / maxPts * 0.40) + (formScore(h.form) * 0.35) + (Math.min(homeXG, 3) / 3 * 0.25);
-  const aS = (a.points / maxPts * 0.40) + (formScore(a.form) * 0.35) + (Math.min(awayXG, 3) / 3 * 0.25);
-  const tot = hS + aS;
-  const rawH = (hS / tot) * 0.73 + 0.06, rawA = (aS / tot) * 0.73, rawD = 0.27;
-  const rawTot = rawH + rawA + rawD;
-  return {
-    home: Math.max(0.10, Math.min(0.75, rawH / rawTot)),
-    away: Math.max(0.10, Math.min(0.65, rawA / rawTot)),
-    draw: Math.max(0.15, Math.min(0.35, rawD / rawTot)),
-    matchConfidence: Math.min(hM.score, aM.score),
-  };
-}
-
-function getCombinations(arr, k) {
+export function getCombinations(arr, k) {
   if (k === 1) return arr.map(x => [x]);
   const result = [];
-  for (let i = 0; i <= arr.length - k; i++) {
+  for (let i = 0; i <= arr.length - k; i++)
     getCombinations(arr.slice(i + 1), k - 1).forEach(rest => result.push([arr[i], ...rest]));
-  }
   return result;
 }
-
-function buildAllLegs(games, standingsMap) {
-  const allLegs = [];
-  games.forEach(game => {
-    const market = game.bookmakers?.[0]?.markets?.[0];
-    if (!market) return;
-    let modelProbs = null;
-    for (const [, { standings }] of Object.entries(standingsMap)) {
-      const mp = calcModelProbsForGame(game.home_team, game.away_team, standings);
-      if (mp && mp.matchConfidence >= 0.6) { modelProbs = mp; break; }
-    }
-    const nvps = calcNoVigProbs(market.outcomes);
-    market.outcomes.forEach((outcome, i) => {
-      if (outcome.price < -200) return;
-      const bookProb = nvps[i];
-      let modelProb = bookProb, edge = 0, hasModel = false;
-      if (modelProbs) {
-        modelProb = outcome.name === game.home_team ? modelProbs.home
-          : outcome.name === game.away_team ? modelProbs.away : modelProbs.draw;
-        edge = modelProb - bookProb;
-        hasModel = true;
-      }
-      allLegs.push({
-        gameId: game.id, sport_key: game.sport_key,
-        gameLabel: game.home_team + " vs " + game.away_team,
-        outcome: outcome.name, price: outcome.price,
-        noVigProb: bookProb, modelProb, edge, hasModel,
-      });
-    });
-  });
-  return allLegs;
+export function edgeColor(e) {
+  if (e == null) return "#445";
+  if (e > 0.08)  return "#00ff88";
+  if (e > 0.03)  return "#88ffcc";
+  if (e > 0)     return "#aaffcc";
+  if (e > -0.05) return "#ffcc44";
+  return "#ff5555";
+}
+export function confidenceLabel(p) {
+  if (p >= 0.65) return { label: "TRÈS SÛR", color: "#00ff88" };
+  if (p >= 0.55) return { label: "SÛR",      color: "#88ffcc" };
+  if (p >= 0.48) return { label: "PROBABLE", color: "#ffcc44" };
+  return              { label: "RISQUÉ",     color: "#ff5555" };
 }
 
-function buildSafeParlays(games, standingsMap, topN = 8) {
-  const safeLegs = buildAllLegs(games, standingsMap).filter(leg =>
-    leg.hasModel && leg.modelProb >= 0.55 && leg.edge > 0 &&
-    leg.price >= -200 && leg.price <= 250
-  );
-  const results = [];
-  getCombinations(safeLegs, 2).forEach(combo => {
-    const ids = combo.map(l => l.gameId);
-    if (new Set(ids).size !== ids.length) return;
-    const combinedDec = calcCombinedDecimal(combo);
-    const modelProb = combo.reduce((acc, l) => acc * l.modelProb, 1);
-    const modelEV = modelProb * combinedDec - 1;
-    const avgEdge = combo.reduce((s, l) => s + l.edge, 0) / 2;
-    const americanOdds = (combinedDec - 1) * 100;
-    if (modelProb < 0.28 || modelProb > 0.72) return;
-    if (americanOdds < 40) return;
-    if (modelEV <= 0) return;
-    const crossLeague = combo[0].sport_key !== combo[1].sport_key;
-    const minLegProb = Math.min(...combo.map(l => l.modelProb));
-    const valueScore = modelEV * modelProb * minLegProb * (1 + avgEdge) * (crossLeague ? 1.2 : 1.0);
-    results.push({ legs: combo, combinedDec, modelProb, modelEV, avgEdge, americanOdds, valueScore, crossLeague, isSafe: true });
-  });
-  return results.sort((a, b) => b.valueScore - a.valueScore).slice(0, topN);
-}
+// ─── Imports React ────────────────────────────────────────────────────────────
+import { useState, useMemo } from "react";
 
-function buildSuggestions(games, standingsMap, topN = 10) {
-  const allLegs = buildAllLegs(games, standingsMap);
-  const results = [];
-  [2, 3].forEach(size => {
-    getCombinations(allLegs, size).forEach(combo => {
-      const ids = combo.map(l => l.gameId);
-      if (new Set(ids).size !== ids.length) return;
-      const combinedDec = calcCombinedDecimal(combo);
-      const modelProb = combo.reduce((acc, l) => acc * l.modelProb, 1);
-      const bookProb  = combo.reduce((acc, l) => acc * l.noVigProb, 1);
-      const modelEV   = modelProb * combinedDec - 1;
-      const avgEdge   = combo.reduce((s, l) => s + l.edge, 0) / combo.length;
-      if (modelProb < 0.12 || modelProb > 0.55) return;
-      if ((combinedDec - 1) * 100 < 120) return;
-      if (modelEV > 0.60 || modelEV < -0.20) return;
-      const crossLeague = new Set(combo.map(l => l.sport_key)).size > 1;
-      const valueScore = modelEV * Math.sqrt(modelProb) * (1 + Math.max(0, avgEdge)) * (crossLeague ? 1.15 : 1.0);
-      results.push({ legs: combo, combinedDec, modelProb, bookProb, modelEV, avgEdge, hasModel: combo.some(l => l.hasModel), crossLeague, valueScore });
-    });
-  });
-  return results.sort((a, b) => b.valueScore - a.valueScore).slice(0, topN);
-}
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function LegRow({ leg, onRemove }) {
-  const conf = confidenceLabel(leg.modelProb);
+// ─── FormPills ────────────────────────────────────────────────────────────────
+export function FormPills({ form }) {
+  if (!form) return <span style={{ color: "#334", fontSize: 10 }}>—</span>;
+  const col = { W: "#00ff88", D: "#ffcc44", L: "#ff5555" };
   return (
-    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 12px", background:"#1a1f2e", borderRadius:6, borderLeft:"3px solid #00ff88", marginBottom:6 }}>
-      <div style={{ flex:1, marginRight:8 }}>
-        <div style={{ fontSize:10, color:"#556", marginBottom:2 }}>{leg.gameLabel}</div>
-        <div style={{ fontSize:13, color:"#eee", fontWeight:600 }}>{leg.outcome}</div>
-        <div style={{ fontSize:10, marginTop:2, display:"flex", gap:8, flexWrap:"wrap" }}>
-          <span style={{ color:"#445" }}>book {fmtPct(leg.noVigProb)}</span>
-          {leg.hasModel && (
-            <>
-              <span style={{ color: leg.edge > 0.02 ? "#00ff88" : leg.edge < -0.02 ? "#ff6666" : "#778" }}>
-                mdl {fmtPct(leg.modelProb)} ({leg.edge >= 0 ? "+" : ""}{fmtPct(leg.edge)})
-              </span>
-              <span style={{ color: conf.color, fontSize:9 }}>{conf.label}</span>
-            </>
-          )}
-        </div>
-      </div>
-      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-        <span style={{ color:"#00ff88", fontFamily:"monospace", fontSize:15, fontWeight:700 }}>{fmtAmerican(leg.price)}</span>
-        <button onClick={() => onRemove(leg)} style={{ background:"none", border:"none", color:"#555", cursor:"pointer", fontSize:20, lineHeight:1, padding:0 }}>×</button>
-      </div>
-    </div>
+    <span style={{ display: "inline-flex", gap: 2 }}>
+      {form.split("").map((c, i) => (
+        <span key={i} style={{
+          width: 14, height: 14, borderRadius: 2, fontSize: 9, fontWeight: 700,
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          background: col[c] || "#334", color: "#000",
+        }}>{c}</span>
+      ))}
+    </span>
   );
 }
 
-function GameCard({ game, selectedLegs, onToggleLeg, standingsMap }) {
-  const market = game.bookmakers?.[0]?.markets?.[0];
-  if (!market) return null;
-  const nvps = calcNoVigProbs(market.outcomes);
-  const date = new Date(game.commence_time);
-  const dateStr = date.toLocaleDateString("fr-CA", { month:"short", day:"numeric" });
-  const timeStr = date.toLocaleTimeString("fr-CA", { hour:"2-digit", minute:"2-digit" });
-  let modelProbs = null;
-  for (const [, { standings }] of Object.entries(standingsMap)) {
-    const mp = calcModelProbsForGame(game.home_team, game.away_team, standings);
-    if (mp && mp.matchConfidence >= 0.6) { modelProbs = mp; break; }
-  }
-  function isSelected(name) { return selectedLegs.some(l => l.gameId === game.id && l.outcome === name); }
-  function outcomeLabel(name) {
-    if (name === game.home_team) return "Dom.";
-    if (name === game.away_team) return "Vis.";
-    return "Nul";
-  }
-  function getModelProb(name) {
-    if (!modelProbs) return null;
-    if (name === game.home_team) return modelProbs.home;
-    if (name === game.away_team) return modelProbs.away;
-    return modelProbs.draw;
-  }
+// ─── TeamStats ────────────────────────────────────────────────────────────────
+export function TeamStats({ stats, label, isHome }) {
+  if (!stats) return null;
+  const conf = confidenceLabel(isHome
+    ? (stats.homeWinRate || stats.ppg / 3)
+    : (stats.awayWinRate || stats.ppg / 3));
   return (
-    <div style={{ background:"#0f1320", border:"1px solid #1e2535", borderRadius:10, padding:"12px 14px", marginBottom:8 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
-        <span style={{ fontSize:10, color:"#445" }}>{dateStr} - {timeStr}</span>
-        <span style={{ fontSize:10, color: modelProbs ? "#00aa55" : "#334" }}>{modelProbs ? "✓ modèle" : game.sport_title}</span>
-      </div>
-      <div style={{ fontSize:12, color:"#aab", marginBottom:10, textAlign:"center", fontWeight:600 }}>
-        {game.home_team} vs {game.away_team}
-      </div>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:5 }}>
-        {market.outcomes.map((outcome, idx) => {
-          const sel = isSelected(outcome.name);
-          const tooHeavy = outcome.price < -200;
-          const mp = getModelProb(outcome.name);
-          const edge = mp ? mp - nvps[idx] : 0;
-          const conf = mp ? confidenceLabel(mp) : null;
-          return (
-            <button key={outcome.name}
-              onClick={() => !tooHeavy && onToggleLeg(game, outcome, nvps[idx], mp || nvps[idx], edge, !!modelProbs)}
-              style={{ background:sel?"#003322":tooHeavy?"#0a0c14":"#141927", border:"1px solid "+(sel?"#00aa55":tooHeavy?"#111":edge>0.03?"#1a4a2a":"#1e2535"), borderRadius:7, padding:"8px 4px", cursor:tooHeavy?"not-allowed":"pointer", textAlign:"center", opacity:tooHeavy?0.4:1 }}>
-              <div style={{ fontSize:10, color:sel?"#00ff88":"#556", marginBottom:2 }}>{outcomeLabel(outcome.name)}</div>
-              <div style={{ fontFamily:"monospace", fontSize:15, fontWeight:700, color:sel?"#00ff88":tooHeavy?"#444":"#ddd" }}>{fmtAmerican(outcome.price)}</div>
-              <div style={{ fontSize:9, color:"#445" }}>book {fmtPct(nvps[idx])}</div>
-              {mp && (
-                <>
-                  <div style={{ fontSize:9, color: edge > 0.03 ? "#00ff88" : edge < -0.03 ? "#ff6666" : "#667", marginTop:1 }}>
-                    mdl {fmtPct(mp)} {edge >= 0 ? "▲" : "▼"}
-                  </div>
-                  <div style={{ fontSize:8, color: conf.color, marginTop:1 }}>{conf.label}</div>
-                </>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function SuggestionCard({ parlay, index, onLoad }) {
-  const evc = evColor(parlay.modelEV);
-  const ec  = edgeColor(parlay.avgEdge);
-  const shortLabel = label => label.split(" vs ").map(t => t.split(" ").slice(-1)[0]).join(" v ");
-  const americanOdds = Math.round((parlay.combinedDec - 1) * 100);
-  return (
-    <div onClick={() => onLoad(parlay)} style={{ background:"#0a0f1a", border:"1px solid "+(parlay.modelEV>0?"#1a3a2a":"#1a1e2e"), borderRadius:10, padding:"12px 14px", marginBottom:8, cursor:"pointer" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6, flexWrap:"wrap", gap:4 }}>
-        <span style={{ fontSize:10, color:"#445" }}>
-          #{index+1} · {parlay.legs.length} JAMBES
-          {parlay.crossLeague && <span style={{ color:"#88aacc", marginLeft:6 }}>CROSS-LIGUE</span>}
-        </span>
-        <div style={{ display:"flex", gap:5 }}>
-          <span style={{ fontSize:10, fontWeight:700, color:ec, background:ec+"22", padding:"2px 6px", borderRadius:20 }}>
-            edge {parlay.avgEdge>=0?"+":""}{fmtPct(parlay.avgEdge)}
-          </span>
-          <span style={{ fontSize:10, fontWeight:700, color:evc, background:evc+"22", padding:"2px 6px", borderRadius:20 }}>
-            EV {parlay.modelEV>=0?"+":""}{(parlay.modelEV*100).toFixed(1)}%
-          </span>
-        </div>
-      </div>
-      {parlay.legs.map((leg, i) => {
-        const conf = confidenceLabel(leg.modelProb);
-        return (
-          <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"4px 0", borderBottom:i<parlay.legs.length-1?"1px solid #111":"none" }}>
-            <div>
-              <span style={{ fontSize:11, color:"#667" }}>{leg.outcome.split(" ").slice(-1)[0]} · {shortLabel(leg.gameLabel)}</span>
-              {leg.hasModel && <span style={{ fontSize:9, color: conf.color, marginLeft:6 }}>{conf.label}</span>}
-            </div>
-            <div style={{ display:"flex", gap:6, alignItems:"center" }}>
-              {leg.hasModel && <span style={{ fontSize:9, color: leg.edge > 0.02 ? "#00ff88" : leg.edge < -0.02 ? "#ff6666" : "#556" }}>{leg.edge>=0?"+":""}{fmtPct(leg.edge)}</span>}
-              <span style={{ fontSize:11, color:"#00cc66", fontFamily:"monospace" }}>{fmtAmerican(leg.price)}</span>
-            </div>
-          </div>
-        );
-      })}
-      <div style={{ marginTop:8, display:"flex", gap:12, flexWrap:"wrap" }}>
-        <span style={{ fontSize:10, color:"#334" }}>Cote: <span style={{ color:"#fff", fontFamily:"monospace" }}>{fmtAmerican(americanOdds)}</span></span>
-        <span style={{ fontSize:10, color:"#334" }}>Prob: <span style={{ color:"#88aacc" }}>{fmtPct(parlay.modelProb)}</span></span>
-        <span style={{ fontSize:10, color:"#334" }}>{parlay.combinedDec.toFixed(2)}x</span>
-      </div>
-    </div>
-  );
-}
-
-function SafeCard({ parlay, index, onLoad, stake }) {
-  const gain = Math.round(stake * parlay.combinedDec - stake);
-  const americanOdds = Math.round((parlay.combinedDec - 1) * 100);
-  return (
-    <div onClick={() => onLoad(parlay)} style={{ background:"#080f0a", border:"2px solid #1a4a2a", borderRadius:12, padding:"14px", marginBottom:10, cursor:"pointer" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
-        <span style={{ fontSize:10, color:"#445" }}>
-          #{index+1} · 2 JAMBES
-          {parlay.crossLeague && <span style={{ color:"#88aacc", marginLeft:6 }}>CROSS-LIGUE</span>}
-        </span>
-        <span style={{ fontSize:11, fontWeight:700, color:"#00ff88", background:"#00ff8822", padding:"2px 8px", borderRadius:20 }}>
-          EV +{(parlay.modelEV*100).toFixed(1)}%
-        </span>
-      </div>
-      {parlay.legs.map((leg, i) => {
-        const conf = confidenceLabel(leg.modelProb);
-        return (
-          <div key={i} style={{ background:"#0f1a0f", borderRadius:8, padding:"8px 10px", marginBottom:6 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <div>
-                <div style={{ fontSize:10, color:"#556" }}>{leg.gameLabel}</div>
-                <div style={{ fontSize:13, color:"#eee", fontWeight:600, marginTop:2 }}>{leg.outcome}</div>
-              </div>
-              <div style={{ textAlign:"right" }}>
-                <div style={{ fontFamily:"monospace", fontSize:16, fontWeight:700, color:"#00cc66" }}>{fmtAmerican(leg.price)}</div>
-                <div style={{ fontSize:9, color: conf.color }}>{conf.label}</div>
-              </div>
-            </div>
-            <div style={{ marginTop:6, display:"flex", gap:12 }}>
-              <span style={{ fontSize:10, color:"#445" }}>Modèle: <span style={{ color:"#88aacc" }}>{fmtPct(leg.modelProb)}</span></span>
-              <span style={{ fontSize:10, color:"#445" }}>Edge: <span style={{ color:"#00ff88" }}>+{fmtPct(leg.edge)}</span></span>
-            </div>
-          </div>
-        );
-      })}
-      <div style={{ marginTop:8, background:"#0a1a0a", borderRadius:8, padding:"10px 12px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+    <div style={{ background: "#0a0f1a", borderRadius: 6, padding: "8px 10px", flex: 1 }}>
+      <div style={{ fontSize: 9, color: "#445", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5 }}>{label}</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <div>
-          <div style={{ fontSize:9, color:"#445" }}>COTE COMBINÉE</div>
-          <div style={{ fontFamily:"monospace", fontSize:17, fontWeight:700, color:"#fff" }}>{fmtAmerican(americanOdds)}</div>
-          <div style={{ fontSize:9, color:"#445", marginTop:2 }}>Prob victoire: {fmtPct(parlay.modelProb)}</div>
+          <div style={{ fontSize: 9, color: "#445" }}>Rang</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>#{stats.rank}</div>
         </div>
-        <div style={{ textAlign:"right" }}>
-          <div style={{ fontSize:9, color:"#445" }}>GAIN POUR ${stake}</div>
-          <div style={{ fontFamily:"monospace", fontSize:22, fontWeight:700, color:"#00ff88" }}>${gain}</div>
+        <div>
+          <div style={{ fontSize: 9, color: "#445" }}>PPG</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: stats.ppg >= 2 ? "#00ff88" : stats.ppg >= 1.5 ? "#ffcc44" : "#ff5555" }}>{stats.ppg}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 9, color: "#445" }}>Buts/m</div>
+          <div style={{ fontSize: 13, color: "#88aacc" }}>
+            {stats.gpgFor}<span style={{ color: "#334" }}>/</span><span style={{ color: "#ff8888" }}>{stats.gpgAgainst}</span>
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 9, color: "#445", marginBottom: 2 }}>Forme</div>
+          <FormPills form={stats.form} />
+        </div>
+        <div style={{ marginLeft: "auto" }}>
+          <span style={{ fontSize: 9, fontWeight: 700, color: conf.color, background: conf.color + "22", padding: "2px 6px", borderRadius: 10 }}>{conf.label}</span>
         </div>
       </div>
     </div>
   );
 }
 
-function HistoryTab({ history, onDelete, onClear }) {
-  const wins    = history.filter(h => h.result === "win").length;
-  const losses  = history.filter(h => h.result === "loss").length;
-  const pending = history.filter(h => h.result === "pending").length;
-  const totalStaked = history.reduce((s, h) => s + (h.stake || 0), 0);
-  const totalWon    = history.filter(h => h.result === "win").reduce((s, h) => s + (h.gain || 0), 0);
-  const totalLost   = history.filter(h => h.result === "loss").reduce((s, h) => s + (h.stake || 0), 0);
-  const netPnl      = totalWon - totalLost;
+// ─── MatchCard ────────────────────────────────────────────────────────────────
+export function MatchCard({ match, picks, onPick }) {
+  const [expanded, setExpanded] = useState(false);
+  const alreadyPicked = side => picks.some(p => p.matchId === match.id && p.side === side);
 
-  if (history.length === 0) {
-    return <div style={{ color:"#334", fontSize:12, padding:"24px 0", textAlign:"center" }}>Aucun pari enregistré</div>
+  return (
+    <div style={{ background: "#0f1320", border: "1px solid #1e2535", borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
+      <div style={{ padding: "10px 14px", cursor: "pointer" }} onClick={() => setExpanded(v => !v)}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#dde3f0" }}>
+              {match.homeTeam} <span style={{ color: "#445", fontSize: 10 }}>vs</span> {match.awayTeam}
+            </div>
+            <div style={{ fontSize: 10, color: "#445", marginTop: 2 }}>
+              {match.sportLabel} · {fmtDate(match.commenceTime)}
+              {match.hasModel && match.rankGap != null && (
+                <span style={{ color: "#ffcc44", marginLeft: 8 }}>Écart rang: {match.rankGap}/{match.totalTeams}</span>
+              )}
+            </div>
+          </div>
+          <span style={{ fontSize: 11, color: "#334" }}>{expanded ? "▲" : "▼"}</span>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: match.odds.draw != null ? "1fr 1fr 1fr" : "1fr 1fr", gap: 6 }}>
+          {["home", "away", ...(match.odds.draw != null ? ["draw"] : [])].map(side => {
+            const odds   = match.odds[side];
+            const imp    = match.impliedProb[side];
+            const model  = match.modelProb?.[side];
+            const edge   = match.value?.[side];
+            const picked = alreadyPicked(side);
+            const isVal  = edge != null && edge > 0;
+            if (odds == null) return null;
+            return (
+              <button key={side}
+                onClick={e => { e.stopPropagation(); if (side !== "draw") onPick(match, side); }}
+                style={{
+                  background: picked ? "#003322" : isVal ? "#0a1a0a" : "#141927",
+                  border: `1px solid ${picked ? "#00aa55" : isVal ? "#1a4a2a" : "#1e2535"}`,
+                  borderRadius: 7, padding: "8px 6px",
+                  cursor: side === "draw" ? "default" : "pointer", textAlign: "center",
+                  opacity: side === "draw" ? 0.7 : 1,
+                }}>
+                <div style={{ fontSize: 9, color: picked ? "#00ff88" : "#445", marginBottom: 2 }}>
+                  {side === "home" ? "DOM" : side === "away" ? "VIS" : "NUL"}
+                </div>
+                <div style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: picked ? "#00ff88" : "#ddd" }}>
+                  {fmtAmerican(odds)}
+                </div>
+                <div style={{ fontSize: 9, color: "#445" }}>book {fmtPct(imp)}</div>
+                {model != null && (
+                  <div style={{ fontSize: 9, color: edgeColor(edge), marginTop: 2 }}>
+                    mdl {fmtPct(model)} {edge >= 0 ? "▲" : "▼"}
+                    {edge != null && <span style={{ marginLeft: 3 }}>({edge >= 0 ? "+" : ""}{fmtPct(edge)})</span>}
+                  </div>
+                )}
+                {picked && <div style={{ fontSize: 8, color: "#00ff88", marginTop: 2 }}>✓ AJOUTÉ</div>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {expanded && (match.homeStats || match.awayStats) && (
+        <div style={{ padding: "0 14px 12px", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <TeamStats stats={match.homeStats} label={`${match.homeTeam} (DOM)`} isHome={true} />
+          <TeamStats stats={match.awayStats} label={`${match.awayTeam} (VIS)`} isHome={false} />
+        </div>
+      )}
+      {expanded && !match.homeStats && !match.awayStats && (
+        <div style={{ padding: "0 14px 12px", fontSize: 10, color: "#334" }}>
+          Stats non disponibles — FOOTBALL_API_KEY requis
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ParlayCard ───────────────────────────────────────────────────────────────
+export function ParlayCard({ parlay, index, stake, onLoad, onSave }) {
+  const gain     = Math.round(stake * parlay.combinedDec - stake);
+  const american = Math.round((parlay.combinedDec - 1) * 100);
+  const evCol    = parlay.modelEV > 0.05 ? "#00ff88" : parlay.modelEV > 0 ? "#88ffcc" : "#ffcc44";
+  return (
+    <div style={{ background: "#080f0a", border: `2px solid ${parlay.modelEV > 0 ? "#1a4a2a" : "#1a2035"}`, borderRadius: 12, padding: 14, marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
+        <span style={{ fontSize: 10, color: "#445" }}>
+          #{index + 1} · {parlay.legs.length} JAMBES
+          {parlay.crossLeague && <span style={{ color: "#88aacc", marginLeft: 6 }}>MULTI-LIGUE</span>}
+        </span>
+        <div style={{ display: "flex", gap: 6 }}>
+          {parlay.avgEdge != null && (
+            <span style={{ fontSize: 10, fontWeight: 700, color: edgeColor(parlay.avgEdge), background: edgeColor(parlay.avgEdge) + "22", padding: "2px 8px", borderRadius: 20 }}>
+              edge {parlay.avgEdge >= 0 ? "+" : ""}{fmtPct(parlay.avgEdge)}
+            </span>
+          )}
+          <span style={{ fontSize: 10, fontWeight: 700, color: evCol, background: evCol + "22", padding: "2px 8px", borderRadius: 20 }}>
+            EV {parlay.modelEV >= 0 ? "+" : ""}{(parlay.modelEV * 100).toFixed(1)}%
+          </span>
+        </div>
+      </div>
+
+      {parlay.legs.map((leg, i) => {
+        const conf = confidenceLabel(leg.modelProb || 0.4);
+        return (
+          <div key={i} style={{ background: "#0f1a0f", borderRadius: 8, padding: "8px 10px", marginBottom: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: "#556" }}>{leg.matchup}</div>
+                <div style={{ fontSize: 13, color: "#eee", fontWeight: 600, marginTop: 2 }}>{leg.team}</div>
+                {leg.stats && (
+                  <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 9, color: "#445" }}>Rang <span style={{ color: "#88aacc" }}>#{leg.stats.rank}</span></span>
+                    <span style={{ fontSize: 9, color: "#445" }}>PPG <span style={{ color: leg.stats.ppg >= 2 ? "#00ff88" : "#ffcc44" }}>{leg.stats.ppg}</span></span>
+                    <span style={{ fontSize: 9, color: "#445" }}>Forme <FormPills form={leg.stats.form} /></span>
+                  </div>
+                )}
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 8 }}>
+                <div style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 700, color: "#00cc66" }}>{fmtAmerican(leg.odds)}</div>
+                {leg.modelProb != null && <div style={{ fontSize: 9, color: conf.color }}>{conf.label} {fmtPct(leg.modelProb)}</div>}
+                {leg.edge != null && <div style={{ fontSize: 9, color: edgeColor(leg.edge) }}>{leg.edge >= 0 ? "+" : ""}{fmtPct(leg.edge)}</div>}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ background: "#0a1a0a", borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+        <div>
+          <div style={{ fontSize: 9, color: "#445" }}>COTE</div>
+          <div style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 700, color: "#fff" }}>{american >= 0 ? "+" : ""}{american}</div>
+          {parlay.combinedModelProb != null && <div style={{ fontSize: 9, color: "#445", marginTop: 2 }}>Prob modèle: {fmtPct(parlay.combinedModelProb)}</div>}
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 9, color: "#445" }}>GAIN POUR ${stake}</div>
+          <div style={{ fontFamily: "monospace", fontSize: 22, fontWeight: 700, color: "#00ff88" }}>${gain}</div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        <button onClick={() => onLoad(parlay)} style={{ flex: 1, background: "#0a1a2a", border: "1px solid #1a3a5a", color: "#88aacc", padding: "6px", borderRadius: 6, cursor: "pointer", fontSize: 10 }}>
+          → Charger dans Builder
+        </button>
+        <button onClick={() => onSave(parlay)} style={{ flex: 1, background: "#0a1a0a", border: "1px solid #1a4a2a", color: "#00aa55", padding: "6px", borderRadius: 6, cursor: "pointer", fontSize: 10 }}>
+          + Enregistrer
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── HistoryTab ───────────────────────────────────────────────────────────────
+export function HistoryTab({ history, onUpdate, onClear }) {
+  const wins   = history.filter(h => h.result === "win").length;
+  const losses = history.filter(h => h.result === "loss").length;
+  const totalStaked = history.reduce((s, h) => s + (h.stake || 0), 0);
+  const totalWon    = history.filter(h => h.result === "win").reduce((s, h) => s + (h.payout || 0), 0);
+  const net = totalWon - history.filter(h => h.result === "loss").reduce((s, h) => s + (h.stake || 0), 0);
+
+  if (!history.length) return <div style={{ color: "#334", textAlign: "center", padding: "40px 0", fontSize: 12 }}>Aucun pari enregistré</div>;
+
+  return (
+    <div>
+      <div style={{ background: "#0a0f1a", border: "1px solid #1a2035", borderRadius: 10, padding: "12px 14px", marginBottom: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+          {[["✓ Gagnés", wins, "#00ff88"], ["✗ Perdus", losses, "#ff5555"], ["⏳ Attente", history.filter(h => h.result === "pending").length, "#ffcc44"]].map(([l, v, c]) => (
+            <div key={l} style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 9, color: "#445" }}>{l}</div>
+              <div style={{ fontFamily: "monospace", fontSize: 20, fontWeight: 700, color: c }}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ borderTop: "1px solid #1a2035", paddingTop: 10, display: "flex", justifyContent: "space-between" }}>
+          <div><div style={{ fontSize: 9, color: "#445" }}>TOTAL MISÉ</div><div style={{ fontFamily: "monospace", color: "#ccd" }}>${totalStaked}</div></div>
+          <div style={{ textAlign: "right" }}><div style={{ fontSize: 9, color: "#445" }}>P&L NET</div><div style={{ fontFamily: "monospace", fontWeight: 700, color: net >= 0 ? "#00ff88" : "#ff5555" }}>{net >= 0 ? "+" : ""}${net.toFixed(2)}</div></div>
+        </div>
+      </div>
+      <button onClick={onClear} style={{ width: "100%", background: "#1a0a0a", border: "1px solid #aa2222", color: "#ff6666", padding: 7, borderRadius: 6, cursor: "pointer", fontSize: 10, marginBottom: 12 }}>
+        Effacer l'historique
+      </button>
+      {history.map(entry => (
+        <div key={entry.id} style={{ background: "#0a0f1a", border: "1px solid #1a2035", borderRadius: 8, padding: "10px 12px", marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ fontSize: 10, color: "#445" }}>{entry.date}</span>
+            <span style={{ fontFamily: "monospace", fontSize: 12, color: "#fff" }}>{entry.american >= 0 ? "+" : ""}{entry.american}</span>
+          </div>
+          {(entry.legs || []).map((leg, i) => (
+            <div key={i} style={{ fontSize: 11, color: "#667", marginBottom: 2 }}>
+              {leg.team || leg.outcome} · {(leg.odds || leg.price) >= 0 ? "+" : ""}{Math.round(leg.odds || leg.price || 0)}
+            </div>
+          ))}
+          <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 10, color: "#445" }}>Mise ${entry.stake} → <span style={{ color: "#00ff88" }}>${(entry.payout || 0).toFixed(0)}</span></span>
+            <div style={{ display: "flex", gap: 4 }}>
+              {["win", "loss", "pending"].map(r => (
+                <button key={r} onClick={() => onUpdate(entry.id, r)} style={{
+                  padding: "3px 8px", borderRadius: 4, border: "none", cursor: "pointer", fontSize: 9, fontWeight: 700,
+                  background: entry.result === r ? (r === "win" ? "#00ff88" : r === "loss" ? "#ff5555" : "#ffcc44") : "#1a2035",
+                  color: entry.result === r ? "#000" : "#445",
+                }}>{r === "win" ? "✓" : r === "loss" ? "✗" : "⏳"}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── BuilderTab ───────────────────────────────────────────────────────────────
+export function BuilderTab({ picks, onRemove, stake, setStake }) {
+  const [legSize, setLegSize] = useState(3);
+
+  const parlays = useMemo(() => {
+    if (picks.length < legSize) return [];
+    return getCombinations(picks, legSize).map(legs => {
+      const dec  = legs.reduce((a, p) => a * americanToDecimal(p.odds), 1);
+      const win  = stake * dec - stake;
+      const edges = legs.map(l => l.edge).filter(v => v != null);
+      const mps   = legs.map(l => l.modelProb).filter(v => v != null);
+      const avgEdge = edges.length ? edges.reduce((a,b)=>a+b,0)/edges.length : null;
+      const combinedModelProb = mps.length === legs.length ? mps.reduce((a,b)=>a*b,1) : null;
+      const modelEV = combinedModelProb ? combinedModelProb * dec - 1 : null;
+      return { legs, dec, win, american: Math.round((dec-1)*100), avgEdge, combinedModelProb, modelEV };
+    }).sort((a,b) => (b.avgEdge??-99)-(a.avgEdge??-99));
+  }, [picks, legSize, stake]);
+
+  if (picks.length === 0) return (
+    <div style={{ color: "#334", textAlign: "center", padding: "40px 0", fontSize: 12 }}>
+      Clique sur les cotes des matchs pour ajouter des picks
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 9, color: "#445", marginBottom: 6 }}>PICKS ({picks.length})</div>
+        {picks.map((p, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "#1a1f2e", borderRadius: 6, padding: "8px 10px", marginBottom: 5, borderLeft: "3px solid #00ff88" }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: "#556" }}>{p.matchup}</div>
+              <div style={{ fontSize: 13, color: "#eee", fontWeight: 600 }}>{p.team}</div>
+              {p.stats && (
+                <div style={{ display: "flex", gap: 8, marginTop: 3 }}>
+                  <span style={{ fontSize: 9, color: "#445" }}>#{p.stats.rank}</span>
+                  <span style={{ fontSize: 9, color: "#445" }}>PPG {p.stats.ppg}</span>
+                  <FormPills form={p.stats.form} />
+                </div>
+              )}
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontFamily: "monospace", fontSize: 14, color: "#00ff88" }}>{fmtAmerican(p.odds)}</div>
+              {p.edge != null && <div style={{ fontSize: 9, color: edgeColor(p.edge) }}>{p.edge >= 0 ? "+" : ""}{fmtPct(p.edge)}</div>}
+            </div>
+            <button onClick={() => onRemove(i)} style={{ background: "none", border: "none", color: "#445", cursor: "pointer", fontSize: 18 }}>×</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: 9, color: "#445", marginBottom: 4 }}>LEGS</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            {[2, 3, 4, 5].map(n => (
+              <button key={n} onClick={() => setLegSize(n)} style={{
+                background: legSize === n ? "#00ff8822" : "#0f1320",
+                border: `1px solid ${legSize === n ? "#00aa55" : "#1e2535"}`,
+                color: legSize === n ? "#00ff88" : "#556",
+                padding: "4px 10px", borderRadius: 4, cursor:
+// frontend/src/App.jsx
+import { useState, useEffect, useCallback, useMemo } from "react";
+import ParlayOptimizer from "./ParlayOptimizer";
+import { MatchCard, ParlayCard, BuilderTab, HistoryTab, americanToDecimal, getCombinations } from "./AppComponents";
+
+const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const HISTORY_KEY = "parlayedge_history_v2";
+
+export default function App() {
+  const [allSports, setAllSports]           = useState([]);
+  const [selectedSports, setSelectedSports] = useState([]);
+  const [matches, setMatches]               = useState([]);
+  const [loading, setLoading]               = useState(false);
+  const [sportsLoading, setSportsLoading]   = useState(true);
+  const [error, setError]                   = useState("");
+  const [picks, setPicks]                   = useState([]);
+  const [stake, setStake]                   = useState(20);
+  const [activeTab, setActiveTab]           = useState("matches");
+  const [sortBy, setSortBy]                 = useState("value");
+  const [filterEV, setFilterEV]             = useState(false);
+  const [history, setHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
+  });
+
+  useEffect(() => { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); }, [history]);
+
+  useEffect(() => {
+    fetch(`${API}/api/sports`)
+      .then(r => r.json())
+      .then(data => {
+        setAllSports(data.sports || []);
+        const defaults = ["soccer_france_ligue_one","soccer_france_ligue_2","soccer_france_ligue_nationale","soccer_epl","soccer_spain_la_liga","soccer_germany_bundesliga","soccer_italy_serie_a","soccer_spain_segunda_division","soccer_switzerland_superleague","soccer_switzerland_challenge_league","soccer_ireland_premier_division"];
+        const available = (data.sports || []).map(s => s.key);
+        setSelectedSports(defaults.filter(k => available.includes(k)));
+      })
+      .catch(() => setAllSports([]))
+      .finally(() => setSportsLoading(false));
+  }, []);
+
+  const loadMatches = useCallback(async () => {
+    if (!selectedSports.length) return;
+    setLoading(true); setError(""); setMatches([]);
+    try {
+      const r = await fetch(`${API}/api/odds/batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sports: selectedSports, days: 2 }),
+      });
+      if (!r.ok) throw new Error(`Erreur ${r.status}`);
+      const data = await r.json();
+      setMatches(data.matches || []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }, [selectedSports]);
+
+  function toggleSport(key) {
+    setSelectedSports(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  }
+
+  function addPick(match, side) {
+    const team = side === "home" ? match.homeTeam : match.awayTeam;
+    setPicks(prev => {
+      const without = prev.filter(p => p.matchId !== match.id);
+      const already = prev.find(p => p.matchId === match.id && p.side === side);
+      if (already) return without;
+      return [...without, {
+        matchId: match.id, side, team,
+        matchup: `${match.homeTeam} vs ${match.awayTeam}`,
+        odds: match.odds[side],
+        edge: match.value?.[side] ?? null,
+        stats: side === "home" ? match.homeStats : match.awayStats,
+        modelProb: match.modelProb?.[side] ?? null,
+      }];
+    });
+  }
+
+  function removePick(index) { setPicks(prev => prev.filter((_, i) => i !== index)); }
+
+  function saveToHistory(parlay) {
+    setHistory(prev => [{
+      id: Date.now(),
+      date: new Date().toLocaleDateString("fr-CA", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" }),
+      legs: parlay.legs, stake,
+      payout: stake * parlay.combinedDec,
+      american: Math.round((parlay.combinedDec - 1) * 100),
+      result: "pending",
+    }, ...prev]);
+  }
+
+  const sortedMatches = useMemo(() => {
+    let list = [...matches];
+    if (filterEV) list = list.filter(m => m.value && Math.max(m.value.home ?? -99, m.value.away ?? -99) > 0);
+    if (sortBy === "value") list.sort((a, b) => Math.max(b.value?.home??-99, b.value?.away??-99) - Math.max(a.value?.home??-99, a.value?.away??-99));
+    else if (sortBy === "rank") list.sort((a, b) => (b.rankGap ?? 0) - (a.rankGap ?? 0));
+    else list.sort((a, b) => new Date(a.commenceTime) - new Date(b.commenceTime));
+    return list;
+  }, [matches, sortBy, filterEV]);
+
+  const suggestions = useMemo(() => {
+    const validPicks = matches.flatMap(m => {
+      const results = [];
+      for (const side of ["home", "away"]) {
+        const odds = m.odds[side], edge = m.value?.[side], model = m.modelProb?.[side];
+        if (odds == null || odds < -200 || odds > 350) continue;
+        if (!m.hasModel || edge == null || edge <= 0 || model == null || model < 0.50) continue;
+        results.push({ matchId: m.id, side, team: side === "home" ? m.homeTeam : m.awayTeam, matchup: `${m.homeTeam} vs ${m.awayTeam}`, odds, edge, modelProb: model, sport: m.sport, stats: side === "home" ? m.homeStats : m.awayStats });
+      }
+      return results;
+    });
+    return getCombinations(validPicks, 2)
+      .filter(legs => new Set(legs.map(l => l.matchId)).size === legs.length)
+      .map(legs => {
+        const dec = legs.reduce((a, p) => a * americanToDecimal(p.odds), 1);
+        const combinedModelProb = legs.reduce((a, l) => a * l.modelProb, 1);
+        const modelEV = combinedModelProb * dec - 1;
+        if (modelEV <= 0) return null;
+        return { legs, combinedDec: dec, win: stake * dec - stake, avgEdge: legs.reduce((s,l)=>s+l.edge,0)/legs.length, combinedModelProb, modelEV, crossLeague: new Set(legs.map(l=>l.sport)).size > 1 };
+      })
+      .filter(Boolean).sort((a,b)=>b.modelEV-a.modelEV).slice(0,8);
+  }, [matches, stake]);
+
+  const tabs = [
+    { id:"matches",     label:`Matchs${matches.length ? ` (${matches.length})` : ""}` },
+    { id:"suggestions", label:`Sûrs (${suggestions.length})` },
+    { id:"builder",     label:`Builder${picks.length ? ` (${picks.length})` : ""}` },
+    { id:"optimizer",   label:"Optimizer ★" },
+    { id:"history",     label:`Historique (${history.length})` },
+  ];
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#070b14", color:"#ccd", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+      <header style={{ background:"#0a0f1c", borderBottom:"1px solid #1a2035", padding:"12px 20px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+        <div>
+          <div style={{ fontSize:15, fontWeight:700, color:"#00ff88", letterSpacing:2 }}>PARLAY<span style={{ color:"#fff" }}>EDGE</span></div>
+          <div style={{ fontSize:10, color:"#445" }}>
+            {matches.length > 0 ? <span style={{ color:"#00aa55" }}>✓ {matches.length} matchs · {matches.filter(m=>m.hasModel).length} avec modèle</span> : "Soccer · Value model · API-Football"}
+          </div>
+        </div>
+        {picks.length > 0 && <div style={{ background:"#00ff8815", border:"1px solid #00ff8830", borderRadius:20, padding:"4px 12px", fontSize:11, color:"#00ff88" }}>{picks.length} pick{picks.length>1?"s":""}</div>}
+      </header>
+
+      {activeTab !== "optimizer" && (
+        <div style={{ background:"#0a0f1c", borderBottom:"1px solid #1a2035", padding:"10px 20px" }}>
+          {sportsLoading ? (
+            <div style={{ fontSize:10, color:"#445" }}>Chargement des ligues disponibles...</div>
+          ) : (
+            <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:8 }}>
+              {allSports.map(s => {
+                const active = selectedSports.includes(s.key);
+                return (
+                  <button key={s.key} onClick={() => toggleSport(s.key)} style={{ background:active?"#003322":"#0f1320", border:`1px solid ${active?"#00aa55":"#1e2535"}`, color:active?"#00ff88":"#445", padding:"4px 10px", borderRadius:20, cursor:"pointer", fontSize:10, display:"flex", alignItems:"center", gap:4 }}>
+                    {s.label}{!s.hasModel && <span style={{ fontSize:8, color:"#334" }}>·no mdl</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <button onClick={loadMatches} disabled={loading || !selectedSports.length} style={{ background:loading?"#1a2035":"#00ff88", color:loading?"#445":"#000", border:"none", padding:"9px 20px", borderRadius:8, cursor:loading?"not-allowed":"pointer", fontSize:12, fontWeight:700 }}>
+            {loading ? `Chargement ${selectedSports.length} ligues...` : `CHARGER (${selectedSports.length} ligues)`}
+          </button>
+          {error && <div style={{ color:"#ff6666", fontSize:11, marginTop:6 }}>⚠ {error}</div>}
+        </div>
+      )}
+
+      <div style={{ display:"flex", borderBottom:"1px solid #1a2035", overflowX:"auto" }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setActiveTab(t.id)} style={{ flex:"0 0 auto", padding:"10px 14px", border:"none", cursor:"pointer", fontSize:10, background:activeTab===t.id?"#0f1320":"transparent", color:activeTab===t.id?(t.id==="optimizer"?"#f5a623":"#00ff88"):"#445", borderBottom:`2px solid ${activeTab===t.id?(t.id==="optimizer"?"#f5a623":"#00ff88"):"transparent"}`, whiteSpace:"nowrap" }}>{t.label}</button>
+        ))}
+      </div>
+
+      <div style={{ padding:activeTab==="optimizer"?0:"16px 20px", maxWidth:activeTab==="optimizer"?"100%":900, margin:"0 auto" }}>
+
+        {activeTab === "matches" && (
+          <div>
+            {matches.length > 0 && (
+              <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap", alignItems:"center" }}>
+                <span style={{ fontSize:10, color:"#445" }}>Trier:</span>
+                {[["value","Meilleur edge"],["rank","Écart rang"],["date","Date"]].map(([v,l]) => (
+                  <button key={v} onClick={() => setSortBy(v)} style={{ background:sortBy===v?"#00ff8818":"transparent", color:sortBy===v?"#00ff88":"#445", border:`1px solid ${sortBy===v?"#00ff8840":"#1e2535"}`, borderRadius:4, padding:"4px 10px", cursor:"pointer", fontSize:10 }}>{l}</button>
+                ))}
+                <button onClick={() => setFilterEV(v=>!v)} style={{ background:filterEV?"#00ff8818":"transparent", color:filterEV?"#00ff88":"#445", border:`1px solid ${filterEV?"#00ff8840":"#1e2535"}`, borderRadius:4, padding:"4px 10px", cursor:"pointer", fontSize:10 }}>+EV seulement</button>
+              </div>
+            )}
+            {loading && <div style={{ textAlign:"center", color:"#445", padding:40 }}>Analyse de {selectedSports.length} ligues en cours...</div>}
+            {!loading && !error && matches.length === 0 && <div style={{ textAlign:"center", color:"#334", padding:40 }}>Sélectionne des ligues et charge les matchs</div>}
+            {sortedMatches.map(m => <MatchCard key={m.id} match={m} picks={picks} onPick={addPick} />)}
+          </div>
+        )}
+
+        {activeTab === "suggestions" && (
+          <div>
+            <div style={{ background:"#0a1a0a", border:"1px solid #1a4a2a", borderRadius:10, padding:"12px 14px", marginBottom:14 }}>
+              <div style={{ fontSize:11, color:"#00ff88", fontWeight:700, marginBottom:4 }}>🎯 PARLAYS SÉCURITAIRES AUTO</div>
+              <div style={{ fontSize:10, color:"#556", lineHeight:1.6 }}>2 jambes · prob &gt;50% · edge positif · EV positif · toutes ligues</div>
+            </div>
+            <div style={{ marginBottom:12 }}>
+              <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>MISE ($)</div>
+              <input type="number" value={stake} min="1" onChange={e => setStake(Math.max(1, Number(e.target.value)))} style={{ width:80, background:"#0f1320", border:"1px solid #1e2535", borderRadius:4, padding:"6px 10px", color:"#ccd", fontFamily:"monospace", fontSize:13 }} />
+            </div>
+            {suggestions.length === 0 ? (
+              <div style={{ color:"#334", textAlign:"center", padding:40, fontSize:12 }}>{matches.length === 0 ? "Charge les matchs d'abord" : "Aucun parlay sécuritaire trouvé"}</div>
+            ) : (
+              suggestions.map((p, i) => <ParlayCard key={i} parlay={p} index={i} stake={stake} onLoad={parlay => { setPicks(parlay.legs.map(l=>({...l}))); setActiveTab("builder"); }} onSave={saveToHistory} />)
+            )}
+          </div>
+        )}
+
+        {activeTab === "builder" && <BuilderTab picks={picks} onRemove={removePick} stake={stake} setStake={setStake} />}
+        {activeTab === "optimizer" && <ParlayOptimizer />}
+        {activeTab === "history" && <HistoryTab history={history} onUpdate={(id,result) => setHistory(prev=>prev.map(h=>h.id===id?{...h,result}:h))} onClear={() => { if(confirm("Effacer?")) setHistory([]); }} />}
+      </div>
+    </div>
+  );
+}
