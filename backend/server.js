@@ -217,7 +217,7 @@ function findTeam(name, table) {
     const s = matchScore(name, key);
     if (s > bestScore) { bestScore = s; best = val; }
   }
-  return bestScore >= 0.65 ? best : null;
+  return bestScore >= 0.55 ? best : null;
 }
 
 // ─── Model ────────────────────────────────────────────────────────────────────
@@ -307,18 +307,19 @@ function enrichMatches(rawMatches, sportKey, standings, days = 1) {
       value: md ? (() => {
         const vh = parseFloat((md.home - ip.home).toFixed(4));
         const va = parseFloat((md.away - ip.away).toFixed(4));
-        // Cap edges at 15% — anything higher is likely a model matching error
         return {
           home: Math.abs(vh) <= 0.15 ? vh : null,
           away: Math.abs(va) <= 0.15 ? va : null,
         };
       })() : null,
-      homeStats: md?.homeStats || null,
-      awayStats: md?.awayStats || null,
+      homeStats:  md?.homeStats || null,
+      awayStats:  md?.awayStats || null,
       rankGap:    md?.rankGap ?? null,
       pointsGap:  md?.pointsGap ?? null,
       totalTeams: md?.totalTeams ?? null,
-      hasModel: !!md,
+      hasModel:   !!md,
+      // Écart de cotes implicites (utilisable même sans modèle)
+      oddsGap: Math.abs(ip.home - ip.away),
     });
   }
   return results;
@@ -457,4 +458,4 @@ app.get("/api/debug/standings/:sport", async (req, res) => {
     const key = `standings_${league.id}_${league.season}`;
     cache.delete(key);
     const standings = await getStandings(league.id, league.season);
-    if (!standings) return res.json({ error:
+    if (!s
