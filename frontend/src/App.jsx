@@ -104,8 +104,9 @@ export default function App() {
       const results = [];
       for (const side of ["home", "away"]) {
         const odds = m.odds[side], edge = m.value?.[side], model = m.modelProb?.[side];
-        if (odds == null || odds < -200 || odds > 350) continue;
-        if (!m.hasModel || edge == null || edge <= 0 || model == null || model < 0.50) continue;
+        // Seulement des FAVORIS: cotes entre -280 et -100
+        if (odds == null || odds > -100 || odds < -280) continue;
+        if (!m.hasModel || edge == null || edge <= 0 || model == null || model < 0.58) continue;
         results.push({ matchId: m.id, side, team: side === "home" ? m.homeTeam : m.awayTeam, matchup: `${m.homeTeam} vs ${m.awayTeam}`, odds, edge, modelProb: model, sport: m.sport, stats: side === "home" ? m.homeStats : m.awayStats });
       }
       return results;
@@ -117,6 +118,11 @@ export default function App() {
         const combinedModelProb = legs.reduce((a, l) => a * l.modelProb, 1);
         const modelEV = combinedModelProb * dec - 1;
         if (modelEV <= 0) return null;
+        // Max +300 pour les parlays "sûrs" - au-delà c'est trop risqué
+        const americanOdds = Math.round((dec - 1) * 100);
+        if (americanOdds > 300) return null;
+        // Prob combinée minimum 35% - on veut gagner 1 fois sur 3
+        if (combinedModelProb < 0.35) return null;
         return { legs, combinedDec: dec, win: stake * dec - stake, avgEdge: legs.reduce((s,l)=>s+l.edge,0)/legs.length, combinedModelProb, modelEV, crossLeague: new Set(legs.map(l=>l.sport)).size > 1 };
       })
       .filter(Boolean).sort((a,b)=>b.modelEV-a.modelEV).slice(0, maxParlays);
@@ -162,6 +168,7 @@ export default function App() {
       {activeTab !== "optimizer" && (
         <div style={{ background:"#0a0f1c", borderBottom:"1px solid #1a2035", padding:"10px 20px" }}>
           {sportsLoading ? (
+
             <div style={{ fontSize:10, color:"#445" }}>Chargement des ligues...</div>
           ) : (
             <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:8 }}>
@@ -309,4 +316,17 @@ export default function App() {
                       onClick={() => addPick(m, favSide)}
                       disabled={isPicked}
                       style={{ width:"100%", background: isPicked ? "#0a1a0a" : "#003322", border:`1px solid ${isPicked ? "#1a4a2a" : "#00aa55"}`, color: isPicked ? "#445" : "#00ff88", padding:"8px", borderRadius:6, cursor: isPicked ? "default" : "pointer", fontSize:11, fontWeight:700 }}>
-                      {isPicked ? "✓ Dans le Builder" : "→ A
+                      {isPicked ? "✓ Dans le Builder" : "→ Ajouter au Builder"}
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+        {activeTab === "optimizer" && <ParlayOptimizer />}
+        {activeTab === "history" && <HistoryTab history={history} onUpdate={(id,result) => setHistory(prev=>prev.map(h=>h.id===id?{...h,result}:h))} onClear={() => { if(confirm("Effacer?")) setHistory([]); }} />}
+      </div>
+    </div>
+  );
+}
