@@ -1,8 +1,8 @@
 // frontend/src/App.jsx
 import { useState, useEffect, useCallback, useMemo } from "react";
 import ParlayOptimizer from "./ParlayOptimizer";
-import { MatchCard, ParlayCard, americanToDecimal, getCombinations } from "./AppComponents1";
-import { BuilderTab, HistoryTab } from "./AppComponents2";
+import { MatchCard, ParlayCard, BuilderTab, HistoryTab, americanToDecimal, getCombinations } from "./AppComponents";
+
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
 const HISTORY_KEY = "parlayedge_history_v2";
