@@ -19,6 +19,7 @@ export default function App() {
   const [activeTab, setActiveTab]           = useState("matches");
   const [sortBy, setSortBy]                 = useState("value");
   const [filterEV, setFilterEV]             = useState(false);
+  const [days, setDays]                     = useState(1);
   const [maxParlays, setMaxParlays]         = useState(8);
   const [history, setHistory] = useState(() => {
     try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
@@ -46,14 +47,14 @@ export default function App() {
       const r = await fetch(`${API}/api/odds/batch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sports: selectedSports, days: 2 }),
+        body: JSON.stringify({ sports: selectedSports, days }),
       });
       if (!r.ok) throw new Error(`Erreur ${r.status}`);
       const data = await r.json();
       setMatches(data.matches || []);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
-  }, [selectedSports]);
+  }, [selectedSports, days]);
 
   function toggleSport(key) {
     setSelectedSports(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
@@ -181,6 +182,11 @@ export default function App() {
                   <button key={v} onClick={() => setSortBy(v)} style={{ background:sortBy===v?"#00ff8818":"transparent", color:sortBy===v?"#00ff88":"#445", border:`1px solid ${sortBy===v?"#00ff8840":"#1e2535"}`, borderRadius:4, padding:"4px 10px", cursor:"pointer", fontSize:10 }}>{l}</button>
                 ))}
                 <button onClick={() => setFilterEV(v=>!v)} style={{ background:filterEV?"#00ff8818":"transparent", color:filterEV?"#00ff88":"#445", border:`1px solid ${filterEV?"#00ff8840":"#1e2535"}`, borderRadius:4, padding:"4px 10px", cursor:"pointer", fontSize:10 }}>+EV seulement</button>
+                <div style={{ display:"flex", gap:4, marginLeft:8 }}>
+                  {[[1,"Auj."],[2,"2j"]].map(([d,l]) => (
+                    <button key={d} onClick={() => setDays(d)} style={{ background:days===d?"#4a9eff22":"transparent", color:days===d?"#4a9eff":"#445", border:`1px solid ${days===d?"#4a9eff40":"#1e2535"}`, borderRadius:4, padding:"4px 10px", cursor:"pointer", fontSize:10 }}>{l}</button>
+                  ))}
+                </div>
               </div>
             )}
             {loading && <div style={{ textAlign:"center", color:"#445", padding:40 }}>Analyse de {selectedSports.length} ligues...</div>}
