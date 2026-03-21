@@ -145,49 +145,52 @@ async function getCurrentSeason(leagueId) {
 }
 
 async function getStandings(leagueId, season) {
-  // Auto-detect current season instead of using hardcoded value
+  // Auto-detect current season
   const activeSeason = await getCurrentSeason(leagueId) || season;
-  const key = `standings_${leagueId}_${activeSeason}`;
-  const cached = getCache(key);
-  if (cached) return cached;
-  const data = await fbFetch(`standings?league=${leagueId}&season=${activeSeason}`);
-  if (!data) return null;
-  const groups = data?.[0]?.league?.standings || [];
-  if (!groups.length) return null;
 
-  // BUGFIX: Prendre seulement le plus grand groupe (vrai classement)
-  // Évite de merger groupes playoffs/relégation qui faussent les rangs
-  const mainGroup = groups.reduce((best, g) => g.length > best.length ? g : best, groups[0]);
+  // Try current season first
+  for (const trySeason of [activeSeason, activeSeason - 1]) {
+    const key = `standings_${leagueId}_${trySeason}`;
+    const cached = getCache(key);
+    if (cached) return cached;
+    const data = await fbFetch(`standings?league=${leagueId}&season=${trySeason}`);
+    if (!data) continue;
+    const groups = data?.[0]?.league?.standings || [];
+    if (!groups.length) continue;
 
-  // Valider que c'est un vrai classement:
-  // - min 8 équipes avec matchs joués
-  // - moyenne de matchs joués >= 10 (évite début de saison MLS etc.)
-  const validTeams = mainGroup.filter(t => (t.all?.played || 0) >= 5);
-  if (validTeams.length < 8) return null;
-  const avgPlayed = validTeams.reduce((s, t) => s + (t.all?.played || 0), 0) / validTeams.length;
-  if (avgPlayed < 10) return null; // Trop tôt dans la saison
+    // Prendre seulement le plus grand groupe (vrai classement)
+    const mainGroup = groups.reduce((best, g) => g.length > best.length ? g : best, groups[0]);
 
-  const table = {};
-  validTeams.forEach(t => {
-    const played = Math.max(t.all?.played || 1, 1);
-    table[t.team.name] = {
-      rank: t.rank, points: t.points, played,
-      ppg: parseFloat((t.points / played).toFixed(2)),
-      form: (t.form || "").slice(-5),
-      gpgFor: parseFloat(((t.all?.goals?.for || 0) / played).toFixed(2)),
-      gpgAgainst: parseFloat(((t.all?.goals?.against || 0) / played).toFixed(2)),
-      homePlayed: t.home?.played || 0,
-      homeWin: t.home?.win || 0,
-      homeGoalsFor: t.home?.goals?.for || 0,
-      homeGoalsAgainst: t.home?.goals?.against || 0,
-      awayPlayed: t.away?.played || 0,
-      awayWin: t.away?.win || 0,
-      awayGoalsFor: t.away?.goals?.for || 0,
-      awayGoalsAgainst: t.away?.goals?.against || 0,
-    };
-  });
-  setCache(key, table, 6 * 60 * 60 * 1000);
-  return table;
+    // Valider: min 8 équipes, min 15 matchs joués en moyenne
+    // Si pas assez de matchs → essayer la saison précédente
+    const validTeams = mainGroup.filter(t => (t.all?.played || 0) >= 5);
+    if (validTeams.length < 8) continue;
+    const avgPlayed = validTeams.reduce((s, t) => s + (t.all?.played || 0), 0) / validTeams.length;
+    if (avgPlayed < 15) continue; // Trop tôt → essayer saison précédente
+
+    const table = {};
+    validTeams.forEach(t => {
+      const played = Math.max(t.all?.played || 1, 1);
+      table[t.team.name] = {
+        rank: t.rank, points: t.points, played,
+        ppg: parseFloat((t.points / played).toFixed(2)),
+        form: (t.form || "").slice(-5),
+        gpgFor: parseFloat(((t.all?.goals?.for || 0) / played).toFixed(2)),
+        gpgAgainst: parseFloat(((t.all?.goals?.against || 0) / played).toFixed(2)),
+        homePlayed: t.home?.played || 0,
+        homeWin: t.home?.win || 0,
+        homeGoalsFor: t.home?.goals?.for || 0,
+        homeGoalsAgainst: t.home?.goals?.against || 0,
+        awayPlayed: t.away?.played || 0,
+        awayWin: t.away?.win || 0,
+        awayGoalsFor: t.away?.goals?.for || 0,
+        awayGoalsAgainst: t.away?.goals?.against || 0,
+      };
+    });
+    setCache(key, table, 6 * 60 * 60 * 1000);
+    return table;
+  }
+  return null; // Aucune saison avec assez de données
 }
 
 // ─── Team matching ────────────────────────────────────────────────────────────
@@ -329,6 +332,8 @@ function enrichMatches(rawMatches, sportKey, standings, days = 1) {
 // ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
+
+
 app.get("/", (req, res) => res.json({ status: "ParlayEdge API running ✅" }));
 
 // Toutes les ligues soccer disponibles sur le compte
@@ -458,4 +463,69 @@ app.get("/api/debug/standings/:sport", async (req, res) => {
     const key = `standings_${league.id}_${league.season}`;
     cache.delete(key);
     const standings = await getStandings(league.id, league.season);
-    if (!s 
+    if (!standings) return res.json({ error: "no standings", league });
+    const teams = Object.entries(standings)
+      .sort((a, b) => a[1].rank - b[1].rank)
+      .map(([name, s]) => ({ name, rank: s.rank, points: s.points, played: s.played, ppg: s.ppg }));
+    res.json({ league, count: teams.length, teams });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// GET /api/parlay/upcoming - used by ParlayOptimizer tab
+app.get("/api/parlay/upcoming", async (req, res) => {
+  if (!ODDS_KEY) return res.status(500).json({ error: "ODDS_API_KEY missing" });
+  const sportKeys = req.query.sports
+    ? req.query.sports.split(",").map(s => s.trim()).filter(Boolean)
+    : Object.keys(LEAGUE_MAP);
+  const days = parseInt(req.query.days || 1);
+  const allMatches = [];
+  const chunks = [];
+  for (let i = 0; i < sportKeys.length; i += 4) chunks.push(sportKeys.slice(i, i + 4));
+  for (const chunk of chunks) {
+    await Promise.all(chunk.map(async sportKey => {
+      const cacheKey = `odds_${sportKey}_${days}`;
+      let raw = getCache(cacheKey);
+      if (!raw) {
+        try {
+          const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?apiKey=${ODDS_KEY}&regions=us&markets=h2h&oddsFormat=american&daysFrom=${days}`;
+          const r = await fetch(url, { timeout: 10000 });
+          if (!r.ok) return;
+          raw = await r.json();
+          if (raw.length) setCache(cacheKey, raw, 15 * 60 * 1000);
+        } catch { return; }
+      }
+      const leagueConf = LEAGUE_MAP[sportKey];
+      const standings = leagueConf && FB_KEY ? await getStandings(leagueConf.id, leagueConf.season) : null;
+      allMatches.push(...enrichMatches(raw, sportKey, standings, days));
+    }));
+  }
+  allMatches.sort((a, b) => {
+    const va = a.value ? Math.max(a.value.home ?? -99, a.value.away ?? -99) : -99;
+    const vb = b.value ? Math.max(b.value.home ?? -99, b.value.away ?? -99) : -99;
+    return vb - va;
+  });
+  // Rename fields for ParlayOptimizer compatibility
+  const mapped = allMatches.map(m => ({
+    ...m,
+    home_team: m.homeTeam,
+    away_team: m.awayTeam,
+    commence_time: m.commenceTime,
+    implied_prob: m.impliedProb,
+    real_prob: m.modelProb ? {
+      home: m.modelProb.home,
+      away: m.modelProb.away,
+      draw: m.modelProb.draw,
+      home_rank: m.homeStats?.rank,
+      away_rank: m.awayStats?.rank,
+      home_form: m.homeStats?.form,
+      away_form: m.awayStats?.form,
+      home_ppg: m.homeStats?.ppg,
+      away_ppg: m.awayStats?.ppg,
+      rank_gap: m.rankGap,
+    } : null,
+  }));
+  res.json({ matches: mapped, count: mapped.length });
+});
+
+app.listen(PORT, () => console.log(`ParlayEdge API on port ${PORT}`));
