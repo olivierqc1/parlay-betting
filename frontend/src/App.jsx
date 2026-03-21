@@ -19,6 +19,7 @@ export default function App() {
   const [activeTab, setActiveTab]           = useState("matches");
   const [sortBy, setSortBy]                 = useState("value");
   const [filterEV, setFilterEV]             = useState(false);
+  const [maxParlays, setMaxParlays]         = useState(8);
   const [history, setHistory] = useState(() => {
     try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
   });
@@ -30,9 +31,9 @@ export default function App() {
       .then(r => r.json())
       .then(data => {
         setAllSports(data.sports || []);
-        const defaults = ["soccer_france_ligue_one","soccer_france_ligue_2","soccer_france_ligue_nationale","soccer_epl","soccer_spain_la_liga","soccer_germany_bundesliga","soccer_italy_serie_a","soccer_spain_segunda_division","soccer_switzerland_superleague","soccer_switzerland_challenge_league","soccer_ireland_premier_division"];
+        
         const available = (data.sports || []).map(s => s.key);
-        setSelectedSports(defaults.filter(k => available.includes(k)));
+        setSelectedSports(available);
       })
       .catch(() => setAllSports([]))
       .finally(() => setSportsLoading(false));
@@ -117,8 +118,8 @@ export default function App() {
         if (modelEV <= 0) return null;
         return { legs, combinedDec: dec, win: stake * dec - stake, avgEdge: legs.reduce((s,l)=>s+l.edge,0)/legs.length, combinedModelProb, modelEV, crossLeague: new Set(legs.map(l=>l.sport)).size > 1 };
       })
-      .filter(Boolean).sort((a,b)=>b.modelEV-a.modelEV).slice(0,8);
-  }, [matches, stake]);
+      .filter(Boolean).sort((a,b)=>b.modelEV-a.modelEV).slice(0, maxParlays);
+  }, [matches, stake, maxParlays]);
 
   const tabs = [
     { id:"matches",     label:`Matchs${matches.length ? ` (${matches.length})` : ""}` },
@@ -194,9 +195,19 @@ export default function App() {
               <div style={{ fontSize:11, color:"#00ff88", fontWeight:700, marginBottom:4 }}>🎯 PARLAYS SÉCURITAIRES AUTO</div>
               <div style={{ fontSize:10, color:"#556", lineHeight:1.6 }}>2 jambes · prob &gt;50% · edge positif · EV positif · toutes ligues</div>
             </div>
-            <div style={{ marginBottom:12 }}>
-              <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>MISE ($)</div>
-              <input type="number" value={stake} min="1" onChange={e => setStake(Math.max(1, Number(e.target.value)))} style={{ width:80, background:"#0f1320", border:"1px solid #1e2535", borderRadius:4, padding:"6px 10px", color:"#ccd", fontFamily:"monospace", fontSize:13 }} />
+            <div style={{ display:"flex", gap:16, marginBottom:12, flexWrap:"wrap", alignItems:"flex-end" }}>
+              <div>
+                <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>MISE ($)</div>
+                <input type="number" value={stake} min="1" onChange={e => setStake(Math.max(1, Number(e.target.value)))} style={{ width:80, background:"#0f1320", border:"1px solid #1e2535", borderRadius:4, padding:"6px 10px", color:"#ccd", fontFamily:"monospace", fontSize:13 }} />
+              </div>
+              <div>
+                <div style={{ fontSize:9, color:"#445", marginBottom:4 }}>NB PARLAYS</div>
+                <div style={{ display:"flex", gap:4 }}>
+                  {[3,5,8,12,20].map(n => (
+                    <button key={n} onClick={() => setMaxParlays(n)} style={{ background:maxParlays===n?"#00ff8822":"#0f1320", border:`1px solid ${maxParlays===n?"#00aa55":"#1e2535"}`, color:maxParlays===n?"#00ff88":"#556", padding:"5px 9px", borderRadius:4, cursor:"pointer", fontSize:11 }}>{n}</button>
+                  ))}
+                </div>
+              </div>
             </div>
             {suggestions.length === 0 ? (
               <div style={{ color:"#334", textAlign:"center", padding:40, fontSize:12 }}>{matches.length === 0 ? "Charge les matchs d'abord" : "Aucun parlay sécuritaire trouvé"}</div>
