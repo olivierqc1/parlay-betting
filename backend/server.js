@@ -221,6 +221,11 @@ function computeProbs(homeTeam, awayTeam, table) {
       awayWinRate: a.awayPlayed > 0 ? parseFloat((a.awayWin / a.awayPlayed).toFixed(2)) : null,
     },
     rankGap: Math.abs(h.rank - a.rank),
+    pointsGap: Math.abs(h.points - a.points),
+    homeWins: h.win,
+    awayWins: a.win,
+    homePlayed: h.played,
+    awayPlayed: a.played,
     totalTeams: Object.keys(table).length,
   };
 }
