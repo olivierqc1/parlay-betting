@@ -124,8 +124,10 @@ export default function App() {
 
   // Value picks: bon odds sur favoris clairs (écart rang >= 6, cote -250 à -100)
   const valuePicks = matches.filter(m => {
-    if (!m.hasModel || !m.rankGap || m.rankGap < 8) return false;
-    if (!m.pointsGap || m.pointsGap < 10) return false;
+    if (!m.hasModel) return false;
+    const hasRankGap = m.rankGap && m.rankGap >= 8;
+    const hasPointsGap = m.pointsGap && m.pointsGap >= 12;
+    if (!hasRankGap && !hasPointsGap) return false;
     for (const side of ["home","away"]) {
       const odds = m.odds[side], model = m.modelProb?.[side], edge = m.value?.[side];
       if (odds == null || odds < -250 || odds > -80) continue;
@@ -308,7 +310,4 @@ export default function App() {
                       disabled={isPicked}
                       style={{ width:"100%", background: isPicked ? "#0a1a0a" : "#003322", border:`1px solid ${isPicked ? "#1a4a2a" : "#00aa55"}`, color: isPicked ? "#445" : "#00ff88", padding:"8px", borderRadius:6, cursor: isPicked ? "default" : "pointer", fontSize:11, fontWeight:700 }}>
                       {isPicked ? "✓ Dans le Builder" : "→ Ajouter au Builder"}
-                    </button>
-                  </div>
-                );
-              })
+               
