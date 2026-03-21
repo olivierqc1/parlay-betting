@@ -279,7 +279,8 @@ function enrichMatches(rawMatches, sportKey, standings, days = 1) {
       })() : null,
       homeStats: md?.homeStats || null,
       awayStats: md?.awayStats || null,
-      rankGap: md?.rankGap ?? null,
+      rankGap:    md?.rankGap ?? null,
+      pointsGap:  md?.pointsGap ?? null,
       totalTeams: md?.totalTeams ?? null,
       hasModel: !!md,
     });
