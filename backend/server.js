@@ -181,7 +181,7 @@ function findTeam(name, table) {
     const s = matchScore(name, key);
     if (s > bestScore) { bestScore = s; best = val; }
   }
-  return bestScore >= 0.45 ? best : null;
+  return bestScore >= 0.65 ? best : null;
 }
 
 // ─── Model ────────────────────────────────────────────────────────────────────
@@ -226,9 +226,16 @@ function computeProbs(homeTeam, awayTeam, table) {
 }
 
 // ─── Enrich raw matches ───────────────────────────────────────────────────────
-function enrichMatches(rawMatches, sportKey, standings) {
+function enrichMatches(rawMatches, sportKey, standings, days = 1) {
   const results = [];
+  const now = Date.now();
+  const maxMs = (days || 1) * 24 * 60 * 60 * 1000;
   for (const m of rawMatches) {
+    // Skip matches beyond the days window
+    const matchTime = new Date(m.commence_time).getTime();
+    if (matchTime - now > maxMs) continue;
+    // Skip matches already started
+    if (matchTime < now - 2 * 60 * 60 * 1000) continue;
     const home = m.home_team, away = m.away_team;
     const best = { home: null, away: null, draw: null };
     for (const bm of m.bookmakers || []) {
@@ -256,10 +263,15 @@ function enrichMatches(rawMatches, sportKey, standings) {
       commenceTime: m.commence_time,
       odds: best, impliedProb: ip,
       modelProb: md ? { home: md.home, away: md.away, draw: md.draw } : null,
-      value: md ? {
-        home: parseFloat((md.home - ip.home).toFixed(4)),
-        away: parseFloat((md.away - ip.away).toFixed(4)),
-      } : null,
+      value: md ? (() => {
+        const vh = parseFloat((md.home - ip.home).toFixed(4));
+        const va = parseFloat((md.away - ip.away).toFixed(4));
+        // Cap edges at 15% — anything higher is likely a model matching error
+        return {
+          home: Math.abs(vh) <= 0.15 ? vh : null,
+          away: Math.abs(va) <= 0.15 ? va : null,
+        };
+      })() : null,
       homeStats: md?.homeStats || null,
       awayStats: md?.awayStats || null,
       rankGap: md?.rankGap ?? null,
@@ -318,7 +330,7 @@ app.get("/api/odds", async (req, res) => {
   }
   const leagueConf = LEAGUE_MAP[sport];
   const standings = leagueConf && FB_KEY ? await getStandings(leagueConf.id, leagueConf.season) : null;
-  const matches = enrichMatches(raw, sport, standings);
+  const matches = enrichMatches(raw, sport, standings, days);
   matches.sort((a, b) => {
     const va = a.value ? Math.max(a.value.home ?? -99, a.value.away ?? -99) : -99;
     const vb = b.value ? Math.max(b.value.home ?? -99, b.value.away ?? -99) : -99;
@@ -329,7 +341,7 @@ app.get("/api/odds", async (req, res) => {
 
 // Batch: plusieurs ligues en un appel
 app.post("/api/odds/batch", async (req, res) => {
-  const { sports = [], days = 2 } = req.body;
+  const { sports = [], days = 1 } = req.body;
   if (!ODDS_KEY || !sports.length) return res.json({ matches: [] });
   const allMatches = [];
   const chunks = [];
@@ -349,7 +361,7 @@ app.post("/api/odds/batch", async (req, res) => {
       }
       const leagueConf = LEAGUE_MAP[sportKey];
       const standings = leagueConf && FB_KEY ? await getStandings(leagueConf.id, leagueConf.season) : null;
-      allMatches.push(...enrichMatches(raw, sportKey, standings));
+      allMatches.push(...enrichMatches(raw, sportKey, standings, days));
     }));
   }
   allMatches.sort((a, b) => {
