@@ -238,6 +238,10 @@ export function ParlayCard({ parlay, index, stake, onLoad, onSave }) {
     </div>
   );
 }
+// frontend/src/AppComponents2.jsx
+// ── HistoryTab + BuilderTab ──
+import { useState, useMemo } from "react";
+import { fmtAmerican, fmtPct, edgeColor, americanToDecimal, getCombinations, FormPills } from "./AppComponents1";
 
 // ─── HistoryTab ───────────────────────────────────────────────────────────────
 export function HistoryTab({ history, onUpdate, onClear }) {
@@ -356,4 +360,49 @@ export function BuilderTab({ picks, onRemove, stake, setStake }) {
                 background: legSize === n ? "#00ff8822" : "#0f1320",
                 border: `1px solid ${legSize === n ? "#00aa55" : "#1e2535"}`,
                 color: legSize === n ? "#00ff88" : "#556",
-                padding: "4px 10px", borderRadius: 4, cursor:
+                padding: "4px 10px", borderRadius: 4, cursor: "pointer", fontSize: 11,
+              }}>{n}</button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 9, color: "#445", marginBottom: 4 }}>MISE $</div>
+          <input type="number" value={stake} min="1" onChange={e => setStake(Math.max(1, Number(e.target.value)))}
+            style={{ width: 70, background: "#0f1320", border: "1px solid #1e2535", borderRadius: 4, padding: "5px 8px", color: "#ccd", fontFamily: "monospace", fontSize: 13 }} />
+        </div>
+        <div style={{ alignSelf: "flex-end", fontSize: 10, color: "#445" }}>
+          {parlays.length} combinaison{parlays.length > 1 ? "s" : ""}
+        </div>
+      </div>
+
+      {parlays.length === 0 ? (
+        <div style={{ color: "#334", fontSize: 12, textAlign: "center", padding: 16 }}>Ajoute {legSize} picks minimum</div>
+      ) : (
+        parlays.slice(0, 20).map((p, i) => {
+          const evCol = p.modelEV != null ? (p.modelEV > 0.05 ? "#00ff88" : p.modelEV > 0 ? "#88ffcc" : "#ffcc44") : "#445";
+          return (
+            <div key={i} style={{ background: "#0a0f1a", border: `1px solid ${(p.avgEdge||0) > 0 ? "#1a4a2a" : "#1a2035"}`, borderRadius: 10, padding: "12px 14px", marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 700, color: "#fff" }}>{p.american >= 0 ? "+" : ""}{p.american}</span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {p.avgEdge != null && <span style={{ fontSize: 10, color: edgeColor(p.avgEdge), background: edgeColor(p.avgEdge) + "22", padding: "2px 7px", borderRadius: 20 }}>{p.avgEdge >= 0 ? "+" : ""}{fmtPct(p.avgEdge)}</span>}
+                  {p.modelEV != null && <span style={{ fontSize: 10, color: evCol, background: evCol + "22", padding: "2px 7px", borderRadius: 20 }}>EV {p.modelEV >= 0 ? "+" : ""}{(p.modelEV * 100).toFixed(1)}%</span>}
+                </div>
+              </div>
+              {p.legs.map((leg, j) => (
+                <div key={j} style={{ fontSize: 11, color: "#667", marginBottom: 3, display: "flex", justifyContent: "space-between" }}>
+                  <span>{leg.team} <span style={{ color: "#334" }}>· {leg.matchup?.split(" vs ").map(t => t.split(" ").slice(-1)[0]).join(" v ")}</span></span>
+                  <span style={{ fontFamily: "monospace", color: "#00cc66" }}>{fmtAmerican(leg.odds)}</span>
+                </div>
+              ))}
+              <div style={{ marginTop: 8, borderTop: "1px solid #111", paddingTop: 8, display: "flex", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 10, color: "#445" }}>{p.dec.toFixed(2)}x {p.combinedModelProb != null ? `· prob ${fmtPct(p.combinedModelProb)}` : ""}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "#00ff88" }}>${stake} → ${(stake * p.dec).toFixed(0)}</span>
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
