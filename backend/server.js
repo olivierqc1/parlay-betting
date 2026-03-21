@@ -132,27 +132,35 @@ async function getStandings(leagueId, season) {
   if (cached) return cached;
   const data = await fbFetch(`standings?league=${leagueId}&season=${season}`);
   if (!data) return null;
-  const table = {};
   const groups = data?.[0]?.league?.standings || [];
-  groups.forEach(group => {
-    group.forEach(t => {
-      const played = Math.max(t.all?.played || 1, 1);
-      table[t.team.name] = {
-        rank: t.rank, points: t.points, played,
-        ppg: parseFloat((t.points / played).toFixed(2)),
-        form: (t.form || "").slice(-5),
-        gpgFor: parseFloat(((t.all?.goals?.for || 0) / played).toFixed(2)),
-        gpgAgainst: parseFloat(((t.all?.goals?.against || 0) / played).toFixed(2)),
-        homePlayed: t.home?.played || 0,
-        homeWin: t.home?.win || 0,
-        homeGoalsFor: t.home?.goals?.for || 0,
-        homeGoalsAgainst: t.home?.goals?.against || 0,
-        awayPlayed: t.away?.played || 0,
-        awayWin: t.away?.win || 0,
-        awayGoalsFor: t.away?.goals?.for || 0,
-        awayGoalsAgainst: t.away?.goals?.against || 0,
-      };
-    });
+  if (!groups.length) return null;
+
+  // BUGFIX: Prendre seulement le plus grand groupe (vrai classement)
+  // Évite de merger groupes playoffs/relégation qui faussent les rangs
+  const mainGroup = groups.reduce((best, g) => g.length > best.length ? g : best, groups[0]);
+
+  // Valider que c'est un vrai classement (min 8 équipes, min 5 matchs joués)
+  const validTeams = mainGroup.filter(t => (t.all?.played || 0) >= 5);
+  if (validTeams.length < 8) return null;
+
+  const table = {};
+  validTeams.forEach(t => {
+    const played = Math.max(t.all?.played || 1, 1);
+    table[t.team.name] = {
+      rank: t.rank, points: t.points, played,
+      ppg: parseFloat((t.points / played).toFixed(2)),
+      form: (t.form || "").slice(-5),
+      gpgFor: parseFloat(((t.all?.goals?.for || 0) / played).toFixed(2)),
+      gpgAgainst: parseFloat(((t.all?.goals?.against || 0) / played).toFixed(2)),
+      homePlayed: t.home?.played || 0,
+      homeWin: t.home?.win || 0,
+      homeGoalsFor: t.home?.goals?.for || 0,
+      homeGoalsAgainst: t.home?.goals?.against || 0,
+      awayPlayed: t.away?.played || 0,
+      awayWin: t.away?.win || 0,
+      awayGoalsFor: t.away?.goals?.for || 0,
+      awayGoalsAgainst: t.away?.goals?.against || 0,
+    };
   });
   setCache(key, table, 6 * 60 * 60 * 1000);
   return table;
@@ -161,8 +169,12 @@ async function getStandings(leagueId, season) {
 // ─── Team matching ────────────────────────────────────────────────────────────
 function normName(name) {
   return name.toLowerCase()
-    .replace(/\b(fc|cf|sc|ac|as|rc|ss|afc|utd|united|city|town|sporting|athletic|real|club|calcio|inter|atletico|stade|olympique|racing)\b/g, "")
-    .replace(/^(1\.|vfb|vfl|rb|bvb|sv|fsv|tsg|tsv)\s+/g, "")
+    // Remove common club suffixes/prefixes
+    .replace(/\b(fc|cf|sc|ac|as|rc|ss|afc|utd|united|city|town|sporting|athletic|real|club|calcio|inter|atletico|stade|olympique|racing|hotspur|wanderers|rovers|county|villa)\b/g, "")
+    // Remove German/Dutch prefixes
+    .replace(/\b(sv|vfb|vfl|rb|bvb|fsv|tsg|tsv|1\.\s*)\b/g, "")
+    // Remove years like "98", "04", "05" at end
+    .replace(/\s+\d{2}$/, "")
     .replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
 }
 function matchScore(a, b) {
@@ -409,6 +421,24 @@ app.post("/api/parlay/build", (req, res) => {
     return bPos !== aPos ? bPos - aPos : b.decimalOdds - a.decimalOdds;
   });
   res.json({ parlays, count: parlays.length, stake });
+});
+
+// Debug: voir les standings bruts d'une ligue
+app.get("/api/debug/standings/:sport", async (req, res) => {
+  const league = LEAGUE_MAP[req.params.sport];
+  if (!league) return res.status(400).json({ error: "sport inconnu" });
+  if (!FB_KEY) return res.status(500).json({ error: "FOOTBALL_API_KEY missing" });
+  try {
+    // Clear cache for fresh data
+    const key = `standings_${league.id}_${league.season}`;
+    cache.delete(key);
+    const standings = await getStandings(league.id, league.season);
+    if (!standings) return res.json({ error: "no standings", league });
+    const teams = Object.entries(standings)
+      .sort((a, b) => a[1].rank - b[1].rank)
+      .map(([name, s]) => ({ name, rank: s.rank, points: s.points, played: s.played, ppg: s.ppg }));
+    res.json({ league, count: teams.length, teams });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.listen(PORT, () => console.log(`ParlayEdge API on port ${PORT}`));
