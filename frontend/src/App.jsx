@@ -122,9 +122,24 @@ export default function App() {
       .filter(Boolean).sort((a,b)=>b.modelEV-a.modelEV).slice(0, maxParlays);
   }, [matches, stake, maxParlays]);
 
+  // Value picks: bon odds sur favoris clairs (écart rang >= 6, cote -250 à -100)
+  const valuePicks = matches.filter(m => {
+    if (!m.hasModel || !m.rankGap || m.rankGap < 8) return false;
+    if (!m.pointsGap || m.pointsGap < 10) return false;
+    for (const side of ["home","away"]) {
+      const odds = m.odds[side], model = m.modelProb?.[side], edge = m.value?.[side];
+      if (odds == null || odds < -250 || odds > -80) continue;
+      if (model == null || model < 0.60) continue;
+      if (edge == null || edge < -0.05) continue;
+      return true;
+    }
+    return false;
+  });
+
   const tabs = [
     { id:"matches",     label:`Matchs${matches.length ? ` (${matches.length})` : ""}` },
     { id:"suggestions", label:`Sûrs (${suggestions.length})` },
+    { id:"value",       label:`Value 💰${valuePicks.length ? ` (${valuePicks.length})` : ""}` },
     { id:"builder",     label:`Builder${picks.length ? ` (${picks.length})` : ""}` },
     { id:"optimizer",   label:"Optimizer ★" },
     { id:"history",     label:`Historique (${history.length})` },
@@ -224,9 +239,76 @@ export default function App() {
         )}
 
         {activeTab === "builder" && <BuilderTab picks={picks} onRemove={removePick} stake={stake} setStake={setStake} />}
-        {activeTab === "optimizer" && <ParlayOptimizer />}
-        {activeTab === "history" && <HistoryTab history={history} onUpdate={(id,result) => setHistory(prev=>prev.map(h=>h.id===id?{...h,result}:h))} onClear={() => { if(confirm("Effacer?")) setHistory([]); }} />}
-      </div>
-    </div>
-  );
-}
+        {activeTab === "value" && (
+          <div>
+            <div style={{ background:"#0a1a0a", border:"1px solid #1a4a2a", borderRadius:10, padding:"12px 14px", marginBottom:14 }}>
+              <div style={{ fontSize:11, color:"#00ff88", fontWeight:700, marginBottom:4 }}>💰 FAVORIS AVEC VALEUR</div>
+              <div style={{ fontSize:10, color:"#556", lineHeight:1.6 }}>
+                Équipes clairement supérieures (écart rang ≥ 8) · Cotes entre -250 et -80 · Bon rendement pour le risque
+              </div>
+            </div>
+            {valuePicks.length === 0 ? (
+              <div style={{ color:"#334", textAlign:"center", padding:40, fontSize:12 }}>
+                {matches.length === 0 ? "Charge les matchs d'abord" : "Aucun favori à valeur trouvé aujourd'hui"}
+              </div>
+            ) : (
+              valuePicks.map(m => {
+                const favSide = ["home","away"].find(s => m.odds[s] != null && m.odds[s] >= -250 && m.odds[s] <= -80 && (m.modelProb?.[s] || 0) >= 0.60);
+                const favOdds = favSide ? m.odds[favSide] : null;
+                const favModel = favSide ? m.modelProb?.[favSide] : null;
+                const favEdge = favSide ? m.value?.[favSide] : null;
+                const favStats = favSide === "home" ? m.homeStats : m.awayStats;
+                const favTeam = favSide === "home" ? m.homeTeam : m.awayTeam;
+                const underdogOdds = favSide === "home" ? m.odds.away : m.odds.home;
+                const isPicked = picks.some(p => p.matchId === m.id);
+                return (
+                  <div key={m.id} style={{ background:"#080f0a", border:"2px solid #1a4a2a", borderRadius:12, padding:14, marginBottom:10 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:10, flexWrap:"wrap", gap:6 }}>
+                      <div>
+                        <div style={{ fontSize:13, fontWeight:700, color:"#eee" }}>{m.homeTeam} vs {m.awayTeam}</div>
+                        <div style={{ fontSize:10, color:"#445", marginTop:2 }}>{m.sportLabel} · {new Date(m.commenceTime).toLocaleDateString("fr-CA",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})} · Écart rang: <span style={{ color:"#ffcc44" }}>{m.rankGap}/{m.totalTeams}</span> · Écart pts: <span style={{ color:"#00ff88" }}>+{m.pointsGap}</span></div>
+                      </div>
+                      <div style={{ textAlign:"right" }}>
+                        <div style={{ fontSize:9, color:"#445" }}>COTE FAVORI</div>
+                        <div style={{ fontFamily:"monospace", fontSize:22, fontWeight:700, color:"#00ff88" }}>{favOdds >= 0 ? "+" : ""}{favOdds}</div>
+                      </div>
+                    </div>
+                    <div style={{ background:"#0f1a0f", borderRadius:8, padding:"10px 12px", marginBottom:8 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                        <div>
+                          <div style={{ fontSize:12, fontWeight:700, color:"#00ff88" }}>{favTeam} {favSide === "home" ? "(DOM)" : "(VIS)"}</div>
+                          {favStats && (
+                            <div style={{ display:"flex", gap:10, marginTop:4 }}>
+                              <span style={{ fontSize:10, color:"#445" }}>Rang <span style={{ color:"#88aacc" }}>#{favStats.rank}</span></span>
+                              <span style={{ fontSize:10, color:"#445" }}>PPG <span style={{ color: favStats.ppg >= 2 ? "#00ff88" : "#ffcc44" }}>{favStats.ppg}</span></span>
+                              <span style={{ fontSize:10, color:"#445" }}>
+                                Forme {(favStats.form||"").split("").map((c,i) => (
+                                  <span key={i} style={{ display:"inline-block", width:12, height:12, borderRadius:2, fontSize:8, fontWeight:700, textAlign:"center", lineHeight:"12px", background:c==="W"?"#00ff88":c==="D"?"#ffcc44":"#ff5555", color:"#000", marginLeft:1 }}>{c}</span>
+                                ))}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ textAlign:"right" }}>
+                          <div style={{ fontSize:10, color:"#445" }}>Prob modèle</div>
+                          <div style={{ fontSize:16, fontWeight:700, color:"#00ff88" }}>{favModel ? (favModel*100).toFixed(1)+"%" : "—"}</div>
+                          {favEdge != null && <div style={{ fontSize:10, color: favEdge > 0 ? "#00ff88" : "#ff5555" }}>edge {favEdge >= 0 ? "+" : ""}{(favEdge*100).toFixed(1)}%</div>}
+                        </div>
+                      </div>
+                      <div style={{ fontSize:10, color:"#445", borderTop:"1px solid #1a2a1a", paddingTop:6, marginTop:4 }}>
+                        Adversaire cote: <span style={{ fontFamily:"monospace", color:"#888" }}>{underdogOdds >= 0 ? "+" : ""}{underdogOdds}</span>
+                        <span style={{ marginLeft:12 }}>Pour $20 → </span>
+                        <span style={{ color:"#00ff88", fontFamily:"monospace", fontWeight:700 }}>
+                          ${(20 * (favOdds < 0 ? (100/Math.abs(favOdds)+1) : (favOdds/100+1))).toFixed(0)}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => addPick(m, favSide)}
+                      disabled={isPicked}
+                      style={{ width:"100%", background: isPicked ? "#0a1a0a" : "#003322", border:`1px solid ${isPicked ? "#1a4a2a" : "#00aa55"}`, color: isPicked ? "#445" : "#00ff88", padding:"8px", borderRadius:6, cursor: isPicked ? "default" : "pointer", fontSize:11, fontWeight:700 }}>
+                      {isPicked ? "✓ Dans le Builder" : "→ Ajouter au Builder"}
+                    </button>
+                  </div>
+                );
+              })
