@@ -238,10 +238,6 @@ export function ParlayCard({ parlay, index, stake, onLoad, onSave }) {
     </div>
   );
 }
-// frontend/src/AppComponents2.jsx
-// ── HistoryTab + BuilderTab ──
-import { useState, useMemo } from "react";
-import { fmtAmerican, fmtPct, edgeColor, americanToDecimal, getCombinations, FormPills } from "./AppComponents1";
 
 // ─── HistoryTab ───────────────────────────────────────────────────────────────
 export function HistoryTab({ history, onUpdate, onClear }) {
