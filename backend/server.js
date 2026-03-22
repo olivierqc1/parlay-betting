@@ -246,9 +246,9 @@ function computeProbs(homeTeam, awayTeam, table) {
   const rawH = (hS / tot) * 0.73 + 0.06, rawA = (aS / tot) * 0.73, rawD = 0.27;
   const rawTot = rawH + rawA + rawD;
   return {
-    home: Math.max(0.08, Math.min(0.78, rawH / rawTot)),
-    away: Math.max(0.08, Math.min(0.68, rawA / rawTot)),
-    draw: Math.max(0.14, Math.min(0.36, rawD / rawTot)),
+    home: Math.max(0.06, Math.min(0.88, rawH / rawTot)),
+    away: Math.max(0.06, Math.min(0.82, rawA / rawTot)),
+    draw: Math.max(0.08, Math.min(0.32, rawD / rawTot)),
     homeStats: {
       rank: h.rank, ppg: h.ppg, form: h.form,
       gpgFor: h.gpgFor, gpgAgainst: h.gpgAgainst,
@@ -333,7 +333,6 @@ function enrichMatches(rawMatches, sportKey, standings, days = 1) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 
-
 app.get("/", (req, res) => res.json({ status: "ParlayEdge API running ✅" }));
 
 // Toutes les ligues soccer disponibles sur le compte
@@ -389,7 +388,7 @@ app.get("/api/odds", async (req, res) => {
 
 // Batch: plusieurs ligues en un appel
 app.post("/api/odds/batch", async (req, res) => {
-  const { sports = [], days = 1 } = req.body;
+  const { sports = [], days = 2 } = req.body;
   if (!ODDS_KEY || !sports.length) return res.json({ matches: [] });
   const allMatches = [];
   const chunks = [];
