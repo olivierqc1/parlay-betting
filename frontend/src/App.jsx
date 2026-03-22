@@ -121,12 +121,13 @@ export default function App() {
         const dec = legs.reduce((a, p) => a * americanToDecimal(p.odds), 1);
         const combinedModelProb = legs.reduce((a, l) => a * l.modelProb, 1);
         const modelEV = combinedModelProb * dec - 1;
-        if (modelEV <= 0) return null;
-        // Max +300 pour les parlays "sûrs" - au-delà c'est trop risqué
-        const americanOdds = Math.round((dec - 1) * 100);
-        if (americanOdds > 400) return null;
-        // Prob combinée minimum 35% - on veut gagner 1 fois sur 3
+        // Prob combinée minimum 30%
         if (combinedModelProb < 0.30) return null;
+        // Max +500 cote combinée
+        const americanOdds = Math.round((dec - 1) * 100);
+        if (americanOdds > 500) return null;
+        // EV doit être positif - sinon mieux de jouer séparément
+        if (modelEV <= 0) return null;
         return { legs, combinedDec: dec, win: stake * dec - stake, avgEdge: legs.reduce((s,l)=>s+l.edge,0)/legs.length, combinedModelProb, modelEV, crossLeague: new Set(legs.map(l=>l.sport)).size > 1 };
       })
       .filter(Boolean).sort((a,b)=>b.modelEV-a.modelEV).slice(0, maxParlays);
@@ -140,8 +141,8 @@ export default function App() {
     if (!hasRankGap && !hasPointsGap && !hasOddsGap) return false;
     for (const side of ["home","away"]) {
       const odds = m.odds[side], model = m.modelProb?.[side], edge = m.value?.[side];
-      if (odds == null || odds < -250 || odds > -80) continue;
-      if (model == null || model < 0.60) continue;
+      if (odds == null || odds < -400 || odds > -80) continue;
+      if (model == null || model < 0.55) continue;
       if (edge == null || edge < -0.05) continue;
       return true;
     }
@@ -167,8 +168,8 @@ export default function App() {
           </div>
         </div>
         {picks.length > 0 && <div style={{ background:"#00ff8815", border:"1px solid #00ff8830", borderRadius:20, padding:"4px 12px", fontSize:11, color:"#00ff88" }}>{picks.length} pick{picks.length>1?"s":""}</div>}
-      </header>
 
+      </header>
 
       {activeTab !== "optimizer" && (
         <div style={{ background:"#0a0f1c", borderBottom:"1px solid #1a2035", padding:"10px 20px" }}>
