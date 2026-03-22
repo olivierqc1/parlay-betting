@@ -19,7 +19,7 @@ export default function App() {
   const [activeTab, setActiveTab]           = useState("matches");
   const [sortBy, setSortBy]                 = useState("value");
   const [filterEV, setFilterEV]             = useState(false);
-  const [days, setDays]                     = useState(1);
+  const [days, setDays]                     = useState(2);
   const [maxParlays, setMaxParlays]         = useState(8);
   const [history, setHistory] = useState(() => {
     try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
@@ -104,9 +104,9 @@ export default function App() {
       const results = [];
       for (const side of ["home", "away"]) {
         const odds = m.odds[side], edge = m.value?.[side], model = m.modelProb?.[side];
-        // Seulement des FAVORIS: cotes entre -280 et -100
-        if (odds == null || odds > -100 || odds < -280) continue;
-        if (!m.hasModel || edge == null || edge <= 0 || model == null || model < 0.58) continue;
+        // Favoris clairs: cotes entre -300 et +130 (inclut favoris soccer typiques)
+        if (odds == null || odds > 130 || odds < -300) continue;
+        if (!m.hasModel || edge == null || edge <= 0 || model == null || model < 0.55) continue;
         results.push({ matchId: m.id, side, team: side === "home" ? m.homeTeam : m.awayTeam, matchup: `${m.homeTeam} vs ${m.awayTeam}`, odds, edge, modelProb: model, sport: m.sport, stats: side === "home" ? m.homeStats : m.awayStats });
       }
       return results;
@@ -120,9 +120,9 @@ export default function App() {
         if (modelEV <= 0) return null;
         // Max +300 pour les parlays "sûrs" - au-delà c'est trop risqué
         const americanOdds = Math.round((dec - 1) * 100);
-        if (americanOdds > 300) return null;
+        if (americanOdds > 400) return null;
         // Prob combinée minimum 35% - on veut gagner 1 fois sur 3
-        if (combinedModelProb < 0.35) return null;
+        if (combinedModelProb < 0.30) return null;
         return { legs, combinedDec: dec, win: stake * dec - stake, avgEdge: legs.reduce((s,l)=>s+l.edge,0)/legs.length, combinedModelProb, modelEV, crossLeague: new Set(legs.map(l=>l.sport)).size > 1 };
       })
       .filter(Boolean).sort((a,b)=>b.modelEV-a.modelEV).slice(0, maxParlays);
