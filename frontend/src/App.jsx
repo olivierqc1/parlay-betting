@@ -106,7 +106,9 @@ export default function App() {
         const odds = m.odds[side], edge = m.value?.[side], model = m.modelProb?.[side];
         // Cotes raisonnables pour parlays: -300 à +200
         if (odds == null || odds > 200 || odds < -300) continue;
-        if (!m.hasModel || edge == null || edge <= 0 || model == null || model < 0.48) continue;
+        // Edge peut être légèrement négatif - on se fie surtout au modèle + rang
+        if (!m.hasModel || model == null || model < 0.52) continue;
+        if (edge == null || edge < -0.08) continue; // Max -8% d'edge négatif toléré
         results.push({ matchId: m.id, side, team: side === "home" ? m.homeTeam : m.awayTeam, matchup: `${m.homeTeam} vs ${m.awayTeam}`, odds, edge, modelProb: model, sport: m.sport, stats: side === "home" ? m.homeStats : m.awayStats });
       }
       return results;
@@ -168,7 +170,6 @@ export default function App() {
       {activeTab !== "optimizer" && (
         <div style={{ background:"#0a0f1c", borderBottom:"1px solid #1a2035", padding:"10px 20px" }}>
           {sportsLoading ? (
-
             <div style={{ fontSize:10, color:"#445" }}>Chargement des ligues...</div>
           ) : (
             <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:8 }}>
