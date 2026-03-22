@@ -104,9 +104,9 @@ export default function App() {
       const results = [];
       for (const side of ["home", "away"]) {
         const odds = m.odds[side], edge = m.value?.[side], model = m.modelProb?.[side];
-        // Favoris clairs: cotes entre -300 et +130 (inclut favoris soccer typiques)
-        if (odds == null || odds > 130 || odds < -300) continue;
-        if (!m.hasModel || edge == null || edge <= 0 || model == null || model < 0.55) continue;
+        // Cotes raisonnables pour parlays: -300 à +200
+        if (odds == null || odds > 200 || odds < -300) continue;
+        if (!m.hasModel || edge == null || edge <= 0 || model == null || model < 0.48) continue;
         results.push({ matchId: m.id, side, team: side === "home" ? m.homeTeam : m.awayTeam, matchup: `${m.homeTeam} vs ${m.awayTeam}`, odds, edge, modelProb: model, sport: m.sport, stats: side === "home" ? m.homeStats : m.awayStats });
       }
       return results;
