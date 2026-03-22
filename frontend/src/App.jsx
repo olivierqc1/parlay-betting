@@ -100,18 +100,32 @@ export default function App() {
   }, [matches, sortBy, filterEV]);
 
   const suggestions = useMemo(() => {
+    // CRITÈRES OBJECTIFS - basés sur faits quantifiables
     const validPicks = matches.flatMap(m => {
       const results = [];
       for (const side of ["home", "away"]) {
-        const odds = m.odds[side], edge = m.value?.[side], model = m.modelProb?.[side];
-        // Cotes raisonnables pour parlays: -300 à +200
-        if (odds == null || odds > 200 || odds < -300) continue;
-        // On se fie au modèle de prob
-        if (!m.hasModel || model == null || model < 0.52) continue;
-        // Exclure ligues début de saison: PPG trop bas = peu de matchs joués
+        const odds = m.odds[side];
         const stats = side === "home" ? m.homeStats : m.awayStats;
-        if (stats && stats.ppg < 0.8) continue;
-        results.push({ matchId: m.id, side, team: side === "home" ? m.homeTeam : m.awayTeam, matchup: `${m.homeTeam} vs ${m.awayTeam}`, odds, edge, modelProb: model, sport: m.sport, stats: side === "home" ? m.homeStats : m.awayStats });
+        const oppStats = side === "home" ? m.awayStats : m.homeStats;
+        // 1. Cote book entre -100 et -280 (favori clair mais payant)
+        if (odds == null || odds > -100 || odds < -280) continue;
+        // 2. Stats requises
+        if (!stats || !oppStats) continue;
+        // 3. Écart rang >= 6
+        if (!m.rankGap || m.rankGap < 6) continue;
+        // 4. Écart points >= 15
+        if (!m.pointsGap || m.pointsGap < 15) continue;
+        // 5. PPG favori >= 1.5
+        if (stats.ppg < 1.5) continue;
+        // 6. Saison assez avancée
+        if (oppStats.ppg < 0.5) continue;
+        // 7. Forme: au moins 2W sur 5
+        const wins = ((stats.form || "").match(/W/g) || []).length;
+        if (wins < 2) continue;
+        const bookProb = odds < 0 ? Math.abs(odds)/(Math.abs(odds)+100) : 100/(odds+100);
+        const model = m.modelProb?.[side];
+        const edge = m.value?.[side];
+        results.push({ matchId: m.id, side, team: side==="home"?m.homeTeam:m.awayTeam, matchup:`${m.homeTeam} vs ${m.awayTeam}`, odds, edge, modelProb: model||bookProb, bookProb, sport: m.sport, stats, rankGap: m.rankGap, pointsGap: m.pointsGap });
       }
       return results;
     });
@@ -119,18 +133,17 @@ export default function App() {
       .filter(legs => new Set(legs.map(l => l.matchId)).size === legs.length)
       .map(legs => {
         const dec = legs.reduce((a, p) => a * americanToDecimal(p.odds), 1);
+        const combinedBookProb = legs.reduce((a, l) => a * l.bookProb, 1);
         const combinedModelProb = legs.reduce((a, l) => a * l.modelProb, 1);
-        const modelEV = combinedModelProb * dec - 1;
-        // Prob combinée minimum 30%
-        if (combinedModelProb < 0.30) return null;
-        // Max +500 cote combinée
+        const bookEV = combinedBookProb * dec - 1;
         const americanOdds = Math.round((dec - 1) * 100);
-        if (americanOdds > 500) return null;
-        // EV doit être positif - sinon mieux de jouer séparément
-        if (modelEV <= 0) return null;
-        return { legs, combinedDec: dec, win: stake * dec - stake, avgEdge: legs.reduce((s,l)=>s+l.edge,0)/legs.length, combinedModelProb, modelEV, crossLeague: new Set(legs.map(l=>l.sport)).size > 1 };
+        if (combinedBookProb < 0.28) return null;
+        if (americanOdds > 350) return null;
+        if (bookEV <= 0) return null;
+        const avgEdge = legs.map(l => l.edge).filter(v=>v!=null).reduce((a,b,_,arr)=>a+b/arr.length,0);
+        return { legs, combinedDec: dec, win: stake*dec-stake, avgEdge, combinedModelProb, combinedBookProb, modelEV: bookEV, crossLeague: new Set(legs.map(l=>l.sport)).size>1 };
       })
-      .filter(Boolean).sort((a,b)=>b.modelEV-a.modelEV).slice(0, maxParlays);
+      .filter(Boolean).sort((a,b)=>b.combinedBookProb-a.combinedBookProb).slice(0, maxParlays);
   }, [matches, stake, maxParlays]);
 
   // Value picks: bon odds sur favoris clairs (écart rang >= 6, cote -250 à -100)
@@ -155,6 +168,7 @@ export default function App() {
     { id:"value",       label:`Value 💰${valuePicks.length ? ` (${valuePicks.length})` : ""}` },
     { id:"builder",     label:`Builder${picks.length ? ` (${picks.length})` : ""}` },
     { id:"optimizer",   label:"Optimizer ★" },
+
     { id:"history",     label:`Historique (${history.length})` },
   ];
 
@@ -168,7 +182,6 @@ export default function App() {
           </div>
         </div>
         {picks.length > 0 && <div style={{ background:"#00ff8815", border:"1px solid #00ff8830", borderRadius:20, padding:"4px 12px", fontSize:11, color:"#00ff88" }}>{picks.length} pick{picks.length>1?"s":""}</div>}
-
       </header>
 
       {activeTab !== "optimizer" && (
